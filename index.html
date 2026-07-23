@@ -1,10 +1,10 @@
 <!--
-  * 功能描述：電子聯絡簿寫入系統 - 簡化直覺版 (雲端資料直接載入正式區 + 智能附加)
-  * 代碼產生日期與時間：2026-07-23 23:02
+  * 功能描述：電子聯絡簿寫入系統 - 網頁前端 (完整包含備/嘉欄位 + 表格科目全對齊)
+  * 代碼產生日期與時間：2026-07-23 23:51
   * 說明：
-  * 1. 流程簡化：取消獨立唯讀預覽區，讀取雲端資料時直接載入至正式輸入區。
-  * 2. 智能附加 (Smart Merge)：若正式區已有輸入內容，讀取或複製暫存時採換行「附加」而非覆蓋。
-  * 3. 完整月曆選擇與防衛架構：原生 HTML5 月曆切換、SHA-256 雜湊、JSONP 匿名防 302 重導向與 iframe 跳脫。
+  * 1. 補齊「備/嘉」：科目選單正式加入「備/嘉」，對應簡報表格最下方備註與嘉獎欄位。
+  * 2. 多行與欄位對齊：完全對接簡報表格結構 (國文、英語、數學、自然、歷史、地理、公民、備/嘉)。
+  * 3. 離線草稿與自動備份：草稿區同步支援「備/嘉」與暫存紀錄。
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -14,7 +14,6 @@
   <title>電子聯絡簿寫入程式</title>
   
   <script>
-    // 自動跳脫 GAS iframe 隔離，確保取得完整視窗與 Storage 存取權
     if (window.top !== window.self) {
       try {
         window.top.location.href = window.location.href;
@@ -185,7 +184,7 @@
     .status-success { background-color: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
     .status-error { background-color: #f8d7da; color: #842029; border: 1px solid #f5c2c7; }
 
-    /* 離線草稿區區塊 */
+    /* 離線草稿區塊 */
     .draft-section {
       margin-top: 28px;
       border: 2px dashed var(--draft-border);
@@ -247,16 +246,18 @@
     </div>
   </div>
 
-  <!-- 3. 科目選擇 -->
+  <!-- 3. 科目選擇 (包含 備/嘉 完整對齊) -->
   <div class="form-group">
-    <label for="subject">🧩 選擇科目：</label>
+    <label for="subject">🧩 選擇科目 / 欄位：</label>
     <select id="subject" onchange="onDateOrSubjectChange()">
       <option value="國文">國文</option>
       <option value="英語">英語</option>
       <option value="數學">數學</option>
-      <option value="理化">理化</option>
-      <option value="地科">地科</option>
-      <option value="社會">社會</option>
+      <option value="自然">自然</option>
+      <option value="歷史">歷史</option>
+      <option value="地理">地理</option>
+      <option value="公民">公民</option>
+      <option value="備/嘉">備/嘉</option>
     </select>
   </div>
 
@@ -270,20 +271,20 @@
   <div class="grid-2col form-group">
     <div>
       <label for="formalExam">📌 正式考試內容：</label>
-      <textarea id="formalExam" rows="3" placeholder="要寫入簡報的考試內容..."></textarea>
+      <textarea id="formalExam" rows="4" placeholder="要寫入簡報的考試內容 (可換行)..."></textarea>
     </div>
     <div>
-      <label for="formalHomework">✍️ 正式作業內容：</label>
-      <textarea id="formalHomework" rows="3" placeholder="要寫入簡報的作業內容..."></textarea>
+      <label for="formalHomework">✍️ 正式作業內容 / 備註：</label>
+      <textarea id="formalHomework" rows="4" placeholder="要寫入簡報的作業或備註內容 (可換行)..."></textarea>
     </div>
   </div>
 
   <!-- 6. 主要操作按鈕 -->
- <button class="btn btn-preview" onclick="handleRead()">
+  <button class="btn btn-preview" onclick="handleRead()">
     ☁️ 讀取雲端投影片內容
   </button> 
   
- <button class="btn btn-submit" onclick="handleWrite()">
+  <button class="btn btn-submit" onclick="handleWrite()">
     💾 修改並寫入雲端簡報
   </button>
 
@@ -309,7 +310,7 @@
       </div>
 
       <div class="form-group" style="margin-bottom:0;">
-        <label for="draftHomework">✍️ 暫存作業：</label>
+        <label for="draftHomework">✍️ 暫存作業 / 備註：</label>
         <textarea id="draftHomework" rows="3" placeholder="斷線時可在此輸入作業草稿..." oninput="autoSaveDraft()"></textarea>
       </div>
     </div>
@@ -330,7 +331,6 @@
 </div>
 
 <script>
-  // 請替換為您正式發布的 GAS Web App URL
   const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxm7i2Zh80lsjZp5Mf3TkyeEQvurZEcEqHhEdDrbNU7eNbRyalwubozpI5Ed7wcm-XpTg/exec";
 
   async function hashPassword(plainText) {
@@ -449,9 +449,6 @@
     }
   }
 
-  /**
-   * 智能合併文字 (若已有內容則換行附加，避開完全重複)
-   */
   function smartMergeText(existingVal, newVal) {
     existingVal = (existingVal || "").trim();
     newVal = (newVal || "").trim();
@@ -461,9 +458,6 @@
     return `${existingVal}\n${newVal}`;
   }
 
-  /**
-   * ⚡ 一鍵複製暫存內容至正式區
-   */
   function copyDraftToFormal() {
     const draftExam = document.getElementById("draftExam").value;
     const draftHomework = document.getElementById("draftHomework").value;
@@ -511,15 +505,11 @@
 
   function onDateOrSubjectChange() {
     loadDraftForCurrentSubject();
-    // 切換日期科目時，清空正式區，準備呈現新選擇日期的資料
     document.getElementById("formalExam").value = "";
     document.getElementById("formalHomework").value = "";
     document.getElementById("hasScore").checked = false;
   }
 
-  /**
-   * 寫入 Handler
-   */
   async function handleWrite() {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
@@ -550,9 +540,6 @@
     }
   }
 
-  /**
-   * 讀取 Handler：直接讀入雲端內容至正式區
-   */
   async function handleRead() {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
@@ -579,7 +566,6 @@
         const currentFormalExam = document.getElementById("formalExam").value;
         const currentFormalHomework = document.getElementById("formalHomework").value;
 
-        // 直接智能帶入正式區 (若正式區有自己先打的內容，自動換行附加)
         document.getElementById("formalExam").value = smartMergeText(currentFormalExam, cloudExamVal);
         document.getElementById("formalHomework").value = smartMergeText(currentFormalHomework, cloudHomeworkVal);
         if (isScore) {
