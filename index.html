@@ -1,7 +1,10 @@
 <!--
-  * 功能描述：電子聯絡簿寫入系統 - 完整旗艦版 (含草稿區完整按鈕)
-  * 代碼產生日期與時間：2026-07-23 22:43
-  * 說明：包含完整的暫存草稿讀取與清除按鈕、SHA-256 密碼雜湊、JSONP 防快取與 iframe 頂層跳脫。
+  * 功能描述：電子聯絡簿寫入程式 - 完整旗艦版 (功能全數還原 + 安全防護升級)
+  * 代碼產生日期與時間：2026-07-23 22:48
+  * 說明：
+  * 1. 完整 UI 還原：包含正式考試/作業框、今日有成績勾選、日期前後天切換、一鍵複製暫存至正式區按鈕。
+  * 2. 本機離線草稿區：獨立草稿暫存、自動儲存與手動清除/載入機制。
+  * 3. 雙模組相容：自動跳脫 GAS iframe 隔離，SHA-256 密碼雜湊，徹底排除 Android 多帳號 302 重導向問題。
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -28,6 +31,8 @@
       --btn-green-hover: #146c43;
       --btn-dark: #212529;
       --btn-dark-hover: #1c1f23;
+      --btn-warning: #ffc107;
+      --btn-warning-hover: #ffca2c;
       --btn-danger: #dc3545;
       --btn-danger-hover: #bb2d3b;
       --btn-secondary: #6c757d;
@@ -55,7 +60,7 @@
 
     .container {
       width: 100%;
-      max-width: 600px;
+      max-width: 650px;
       background: var(--card-bg);
       border-radius: var(--radius);
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
@@ -86,6 +91,7 @@
 
     input[type="password"],
     input[type="text"],
+    input[type="date"],
     select,
     textarea {
       width: 100%;
@@ -103,6 +109,15 @@
       box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
     }
 
+    /* 日期選擇列樣式 */
+    .date-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .date-row select { flex: 1; }
+
     .checkbox-group {
       display: flex;
       align-items: center;
@@ -110,9 +125,16 @@
       margin: 16px 0;
       font-size: 0.95rem;
       cursor: pointer;
+      user-select: none;
     }
 
     .checkbox-group input { width: 18px; height: 18px; cursor: pointer; }
+
+    .grid-2col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
 
     .btn {
       width: 100%;
@@ -143,6 +165,8 @@
       font-size: 0.85rem;
       margin-bottom: 0;
     }
+    .btn-warning { background-color: var(--btn-warning); color: #000; }
+    .btn-warning:hover { background-color: var(--btn-warning-hover); }
     .btn-danger { background-color: var(--btn-danger); }
     .btn-danger:hover { background-color: var(--btn-danger-hover); }
     .btn-secondary { background-color: var(--btn-secondary); }
@@ -159,7 +183,7 @@
     .status-success { background-color: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
     .status-error { background-color: #f8d7da; color: #842029; border: 1px solid #f5c2c7; }
 
-    /* 離線草稿區塊 */
+    /* 離線草稿區區塊 */
     .draft-section {
       margin-top: 28px;
       border: 2px dashed var(--draft-border);
@@ -185,21 +209,16 @@
 
     .draft-status { font-size: 0.825rem; color: #6c757d; }
 
-    .draft-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-
     .draft-actions {
       display: flex;
-      gap: 10px;
+      gap: 8px;
       justify-content: flex-end;
+      flex-wrap: wrap;
+      margin-top: 12px;
     }
 
-    @media (max-width: 480px) {
-      .draft-grid { grid-template-columns: 1fr; }
+    @media (max-width: 520px) {
+      .grid-2col { grid-template-columns: 1fr; }
       .draft-actions { flex-direction: column; }
       .draft-actions .btn-sm { width: 100%; }
     }
@@ -210,19 +229,26 @@
 <div class="container">
   <h2>📝 電子聯絡簿寫入程式</h2>
   
+  <!-- 1. 驗證密碼 -->
   <div class="form-group">
     <label for="pwd">🔑 請輸入密碼（驗證身份以讀寫）：</label>
     <input type="password" id="pwd" placeholder="請輸入授權密碼...">
   </div>
 
+  <!-- 2. 日期選擇 (支援動態切換與選單) -->
   <div class="form-group">
     <label for="targetDate">📅 選擇同步日期：</label>
-    <select id="targetDate"></select>
+    <div class="date-row">
+      <button class="btn btn-sm btn-secondary" onclick="shiftDate(-1)">◀ 前一天</button>
+      <select id="targetDate" onchange="onDateOrSubjectChange()"></select>
+      <button class="btn btn-sm btn-secondary" onclick="shiftDate(1)">後一天 ▶</button>
+    </div>
   </div>
 
+  <!-- 3. 科目選擇 -->
   <div class="form-group">
     <label for="subject">🧩 選擇科目：</label>
-    <select id="subject" onchange="loadDraftForCurrentSubject()">
+    <select id="subject" onchange="onDateOrSubjectChange()">
       <option value="國文">國文</option>
       <option value="英文">英文</option>
       <option value="數學">數學</option>
@@ -232,11 +258,25 @@
     </select>
   </div>
 
+  <!-- 4. 今日有成績勾選框 -->
   <label class="checkbox-group">
     <input type="checkbox" id="hasScore">
     📊 此科目今日有成績（有勾選送出顯示「有」）
   </label>
 
+  <!-- 5. 正式輸入區：考試與作業 -->
+  <div class="grid-2col form-group">
+    <div>
+      <label for="formalExam">📌 正式考試內容：</label>
+      <textarea id="formalExam" rows="3" placeholder="要寫入簡報的考試內容..."></textarea>
+    </div>
+    <div>
+      <label for="formalHomework">✍️ 正式作業內容：</label>
+      <textarea id="formalHomework" rows="3" placeholder="要寫入簡報的作業內容..."></textarea>
+    </div>
+  </div>
+
+  <!-- 6. 主要操作按鈕 -->
   <button class="btn btn-submit" onclick="handleWrite()">
     💾 確認修改並覆蓋回簡報
   </button>
@@ -247,14 +287,14 @@
 
   <div id="statusBox" class="status-box"></div>
 
-  <!-- 本機離線草稿暫存區 (補回完整功能按鈕) -->
+  <!-- 7. 本機離線草稿暫存區 -->
   <div class="draft-section">
     <div class="draft-header">
       <div class="draft-title">💾 本機離線草稿暫存區</div>
       <div class="draft-status" id="draftNotice">(目前此科目無草稿)</div>
     </div>
     
-    <div class="draft-grid">
+    <div class="grid-2col">
       <div class="form-group" style="margin-bottom:0;">
         <label for="draftExam">📌 暫存考試：</label>
         <textarea id="draftExam" rows="3" placeholder="斷線時可在此輸入考試草稿..." oninput="autoSaveDraft()"></textarea>
@@ -266,22 +306,28 @@
       </div>
     </div>
 
-    <!-- 補回草稿控制按鈕 -->
+    <!-- 草稿控制按鈕 (含一鍵複製至正式區) -->
     <div class="draft-actions">
+      <button class="btn btn-sm btn-warning" onclick="copyDraftToFormal()">
+        ⚡ 一鍵複製暫存內容到正式區
+      </button>
       <button class="btn btn-sm btn-secondary" onclick="loadDraftForCurrentSubject()">
-        🔄 重新讀取此科目草稿
+        🔄 讀取暫存
       </button>
       <button class="btn btn-sm btn-danger" onclick="clearDraftForCurrentSubject()">
-        🗑️ 清除此科目暫存草稿
+        🗑️ 清除暫存
       </button>
     </div>
   </div>
 </div>
 
 <script>
-  // 請將此處替換為您正式發布的 GAS Web App URL
+  // 請替換為您正式發布的 GAS Web App URL
   const GAS_WEB_APP_URL = "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec";
 
+  /**
+   * SHA-256 加密密碼 (避免明文傳輸)
+   */
   async function hashPassword(plainText) {
     if (!plainText) return "";
     const encoder = new TextEncoder();
@@ -291,6 +337,9 @@
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  /**
+   * JSONP 通訊封裝 (破壞快取、crossOrigin 匿名與逾時機制)
+   */
   function sendJsonpRequest(action, dataParams = {}) {
     return new Promise((resolve, reject) => {
       if (!GAS_WEB_APP_URL || GAS_WEB_APP_URL.includes("YOUR_DEPLOYMENT_ID")) {
@@ -301,12 +350,12 @@
       const callbackName = 'jsonp_cb_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
       const script = document.createElement('script');
       
-      script.crossOrigin = "anonymous";
+      script.crossOrigin = "anonymous"; // 強制匿名，降低多帳號干擾
 
       const queryParams = new URLSearchParams({
         action: action,
         callback: callbackName,
-        _ts: Date.now(),
+        _ts: Date.now(), // 破壞快取
         ...dataParams
       });
 
@@ -349,12 +398,13 @@
     box.innerText = msg;
   }
 
+  // 初始化日期選單 (前後 7 天)
   function initDatePicker() {
     const select = document.getElementById("targetDate");
     const today = new Date();
     select.innerHTML = "";
 
-    for (let i = -2; i <= 5; i++) {
+    for (let i = -3; i <= 7; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() + i);
       const dateStr = d.toISOString().split('T')[0];
@@ -363,6 +413,17 @@
       option.textContent = dateStr + (i === 0 ? " (今天)" : "");
       if (i === 0) option.selected = true;
       select.appendChild(option);
+    }
+  }
+
+  // 前一天 / 後一天 按鈕功能
+  function shiftDate(offset) {
+    const select = document.getElementById("targetDate");
+    const currentIndex = select.selectedIndex;
+    const newIndex = currentIndex + offset;
+    if (newIndex >= 0 && newIndex < select.options.length) {
+      select.selectedIndex = newIndex;
+      onDateOrSubjectChange();
     }
   }
 
@@ -398,7 +459,20 @@
     }
   }
 
-  // 清除當前科目草稿按鈕邏輯
+  // ⚡ 一鍵複製暫存內容到正式區
+  function copyDraftToFormal() {
+    const draftExam = document.getElementById("draftExam").value;
+    const draftHomework = document.getElementById("draftHomework").value;
+
+    if (!draftExam && !draftHomework) {
+      return alert("目前草稿區尚無內容可複製！");
+    }
+
+    document.getElementById("formalExam").value = draftExam;
+    document.getElementById("formalHomework").value = draftHomework;
+    showStatus("⚡ 已成功將草稿內容複製至正式輸入區！");
+  }
+
   function clearDraftForCurrentSubject() {
     const key = getDraftKey();
     if (confirm("確定要清除此科目的本機暫存草稿嗎？")) {
@@ -421,13 +495,20 @@
     }
   }
 
+  function onDateOrSubjectChange() {
+    loadDraftForCurrentSubject();
+  }
+
+  /**
+   * 寫入 Handler (將正式區內容送到 GAS)
+   */
   async function handleWrite() {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
     const subject = document.getElementById("subject").value;
     const hasScore = document.getElementById("hasScore").checked ? "有" : "無";
-    const exam = document.getElementById("draftExam").value.trim();
-    const homework = document.getElementById("draftHomework").value.trim();
+    const formalExam = document.getElementById("formalExam").value.trim();
+    const formalHomework = document.getElementById("formalHomework").value.trim();
 
     if (!rawPwd) return alert("請輸入驗證密碼！");
 
@@ -441,8 +522,8 @@
         date: date,
         subject: subject,
         hasScore: hasScore,
-        exam: exam,
-        homework: homework
+        exam: formalExam,
+        homework: formalHomework
       });
 
       showStatus(`✅ 寫入成功！ (${new Date().toLocaleTimeString()})`);
@@ -451,6 +532,9 @@
     }
   }
 
+  /**
+   * 讀取 Handler (從雲端載入至正式區與草稿區)
+   */
   async function handleRead() {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
@@ -470,12 +554,11 @@
       });
 
       if (res && res.data) {
-        if (res.data.exam !== undefined) document.getElementById("draftExam").value = res.data.exam;
-        if (res.data.homework !== undefined) document.getElementById("draftHomework").value = res.data.homework;
+        if (res.data.exam !== undefined) document.getElementById("formalExam").value = res.data.exam;
+        if (res.data.homework !== undefined) document.getElementById("formalHomework").value = res.data.homework;
         if (res.data.hasScore !== undefined) document.getElementById("hasScore").checked = (res.data.hasScore === "有");
         
-        autoSaveDraft();
-        showStatus("✅ 雲端資料讀取成功並已載入！");
+        showStatus("✅ 雲端資料讀取成功並已載入正式區！");
       } else {
         showStatus("⚠️ 讀取完成，該日期與科目尚無紀錄。");
       }
@@ -487,7 +570,6 @@
   window.addEventListener("DOMContentLoaded", () => {
     initDatePicker();
     loadDraftForCurrentSubject();
-    document.getElementById("targetDate").addEventListener("change", loadDraftForCurrentSubject);
   });
 </script>
 
