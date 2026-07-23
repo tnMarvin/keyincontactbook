@@ -1,10 +1,10 @@
 <!--
-  * 功能描述：電子聯絡簿寫入系統 - 網頁前端 (完整包含備/嘉欄位 + 表格科目全對齊)
-  * 代碼產生日期與時間：2026-07-23 23:51
+  * 功能描述：電子聯絡簿寫入系統 - 網頁前端 (對齊簡報表格與備/嘉合併儲存格相容版)
+  * 代碼產生日期與時間：2026-07-24 00:08
   * 說明：
-  * 1. 補齊「備/嘉」：科目選單正式加入「備/嘉」，對應簡報表格最下方備註與嘉獎欄位。
-  * 2. 多行與欄位對齊：完全對接簡報表格結構 (國文、英語、數學、自然、歷史、地理、公民、備/嘉)。
-  * 3. 離線草稿與自動備份：草稿區同步支援「備/嘉」與暫存紀錄。
+  * 1. 基準維護：以使用者提供之 GitHub 最新 index.html 為基準修正。
+  * 2. UI 互動優化：切換至「備/嘉」時自動停用次要輸入框，避免合併儲存格讀寫資料解析分歧。
+  * 3. 智能附加 (Smart Merge) 強化：避免過度重複與空字串錯置。
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -106,6 +106,11 @@
       outline: none;
       border-color: #86b7fe;
       box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+    }
+
+    textarea:disabled {
+      background-color: #e9ecef;
+      cursor: not-allowed;
     }
 
     .date-row {
@@ -262,7 +267,7 @@
   </div>
 
   <!-- 4. 正式區：今日有成績勾選框 -->
-  <label class="checkbox-group">
+  <label class="checkbox-group" id="scoreCheckboxContainer">
     <input type="checkbox" id="hasScore">
     📊 此科目今日有成績（正式區：有勾選送出顯示「有」）
   </label>
@@ -270,11 +275,11 @@
   <!-- 5. 正式輸入區：考試與作業 -->
   <div class="grid-2col form-group">
     <div>
-      <label for="formalExam">📌 正式考試內容：</label>
+      <label for="formalExam" id="labelFormalExam">📌 正式考試內容：</label>
       <textarea id="formalExam" rows="4" placeholder="要寫入簡報的考試內容 (可換行)..."></textarea>
     </div>
     <div>
-      <label for="formalHomework">✍️ 正式作業內容 / 備註：</label>
+      <label for="formalHomework" id="labelFormalHomework">✍️ 正式作業內容 / 備註：</label>
       <textarea id="formalHomework" rows="4" placeholder="要寫入簡報的作業或備註內容 (可換行)..."></textarea>
     </div>
   </div>
@@ -298,19 +303,19 @@
     </div>
 
     <!-- 暫存區：今日有成績勾選紀錄 -->
-    <label class="checkbox-group" style="margin-top:0;">
+    <label class="checkbox-group" style="margin-top:0;" id="draftScoreCheckboxContainer">
       <input type="checkbox" id="draftHasScore" onchange="autoSaveDraft()">
       📊 此科目今日有成績（草稿暫存）
     </label>
     
     <div class="grid-2col">
       <div class="form-group" style="margin-bottom:0;">
-        <label for="draftExam">📌 暫存考試：</label>
+        <label for="draftExam" id="labelDraftExam">📌 暫存考試：</label>
         <textarea id="draftExam" rows="3" placeholder="斷線時可在此輸入考試草稿..." oninput="autoSaveDraft()"></textarea>
       </div>
 
       <div class="form-group" style="margin-bottom:0;">
-        <label for="draftHomework">✍️ 暫存作業 / 備註：</label>
+        <label for="draftHomework" id="labelDraftHomework">✍️ 暫存作業 / 備註：</label>
         <textarea id="draftHomework" rows="3" placeholder="斷線時可在此輸入作業草稿..." oninput="autoSaveDraft()"></textarea>
       </div>
     </div>
@@ -454,7 +459,7 @@
     newVal = (newVal || "").trim();
     if (!existingVal) return newVal;
     if (!newVal) return existingVal;
-    if (existingVal.includes(newVal)) return existingVal;
+    if (existingVal === newVal || existingVal.includes(newVal)) return existingVal;
     return `${existingVal}\n${newVal}`;
   }
 
@@ -503,7 +508,39 @@
     }
   }
 
+  /**
+   * 科目切換邏輯：若切換到「備/嘉」(合併儲存格)，自動調適 UI
+   */
+  function adaptUIForSubject() {
+    const subject = document.getElementById("subject").value;
+    const isMergeCell = (subject === "備/嘉");
+
+    const formalHomework = document.getElementById("formalHomework");
+    const draftHomework = document.getElementById("draftHomework");
+
+    if (isMergeCell) {
+      document.getElementById("labelFormalExam").innerText = "📌 備註 / 嘉獎 內容：";
+      document.getElementById("labelFormalHomework").innerText = "✍️ (合併儲存格：請於左側輸入)";
+      formalHomework.value = "";
+      formalHomework.disabled = true;
+
+      document.getElementById("labelDraftExam").innerText = "📌 暫存備註 / 嘉獎：";
+      document.getElementById("labelDraftHomework").innerText = "✍️ (合併儲存格：請於左側輸入)";
+      draftHomework.value = "";
+      draftHomework.disabled = true;
+    } else {
+      document.getElementById("labelFormalExam").innerText = "📌 正式考試內容：";
+      document.getElementById("labelFormalHomework").innerText = "✍️ 正式作業內容 / 備註：";
+      formalHomework.disabled = false;
+
+      document.getElementById("labelDraftExam").innerText = "📌 暫存考試：";
+      document.getElementById("labelDraftHomework").innerText = "✍️ 暫存作業 / 備註：";
+      draftHomework.disabled = false;
+    }
+  }
+
   function onDateOrSubjectChange() {
+    adaptUIForSubject();
     loadDraftForCurrentSubject();
     document.getElementById("formalExam").value = "";
     document.getElementById("formalHomework").value = "";
@@ -583,6 +620,7 @@
 
   window.addEventListener("DOMContentLoaded", () => {
     initDatePicker();
+    adaptUIForSubject();
     loadDraftForCurrentSubject();
   });
 </script>
