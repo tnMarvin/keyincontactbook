@@ -376,29 +376,32 @@
       }
     }
 
-    // Service Worker PWA 全離線快取
-    function registerServiceWorker() {
-      if ('serviceWorker' in navigator) {
-        const swCode = `
-          const CACHE_NAME = 'github-pwa-v1';
-          self.addEventListener('install', (e) => self.skipWaiting());
-          self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
-          self.addEventListener('fetch', (e) => {
-            if (e.request.mode === 'navigate') {
-              e.respondWith(
-                fetch(e.request).then((res) => {
-                  const copy = res.clone();
-                  caches.open(CACHE_NAME).then((c) => c.put(e.request, copy));
-                  return res;
-                }).catch(() => caches.match(e.request))
-              );
-            }
-          });
-        `;
-        const blob = new Blob([swCode], { type: 'text/javascript' });
-        navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(console.warn);
-      }
-    }
+    // 修正後的 Service Worker 離線快取註冊
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    // 透過 Data URL 註冊，相容 GitHub Pages 獨立網域
+    const swContent = `
+      const CACHE_NAME = 'github-pwa-v2';
+      self.addEventListener('install', e => self.skipWaiting());
+      self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+      self.addEventListener('fetch', e => {
+        if (e.request.mode === 'navigate') {
+          e.respondWith(
+            fetch(e.request).then(res => {
+              const copy = res.clone();
+              caches.open(CACHE_NAME).then(c => c.put(e.request, copy));
+              return res;
+            }).catch(() => caches.match(e.request))
+          );
+        }
+      });
+    `;
+    const swUrl = 'data:application/javascript;charset=utf-8,' + encodeURIComponent(swContent);
+    navigator.serviceWorker.register(swUrl).catch(() => {
+      // 若瀏覽器限制 Data URL，保持本機 localForage 草稿區正常運作即可
+    });
+  }
+}
   </script>
 </body>
 </html>
