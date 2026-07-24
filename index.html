@@ -21,6 +21,14 @@
         console.warn("無法自動跳脫 iframe，將以當前視窗持續運作。");
       }
     }
+   // 註冊 PWA Service Worker (支援斷線離線開啟介面)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then(() => console.log('PWA Service Worker 註冊完成，已就緒離線開啟。'))
+        .catch(err => console.warn('Service Worker 註冊失敗：', err));
+    });
+  }
   </script>
 
   <style>
