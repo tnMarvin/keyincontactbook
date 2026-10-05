@@ -1,10 +1,11 @@
 <!--
-  * 功能描述：電子聯絡簿寫入系統 - 網頁前端 (整頁全覽版：成績多選按鈕組 + 全寬備嘉獨立框 + PWA 離線支援)
-  * 代碼產生日期與時間：2026-10-06 00:55
+  * 功能描述：電子聯絡簿寫入系統 - 網頁前端 (整頁全覽版 + 狀態框常駐除錯 + PWA 離線機制)
+  * 代碼產生日期與時間：2026-10-06 01:21
   * 說明：
-  * 1. 廢除科目下拉選單，頂部提供「今日有成績科目」7 科 Chips 多選點擊組。
+  * 1. 頂部提供「今日有成績科目」7 科 Chips 多選點擊組。
   * 2. 中段並列考試與作業大框，下方全寬橫跨「備註 / 嘉言錄」。
-  * 3. 離線草稿鏡像升級，一鍵暫存與復原整日聯絡簿。
+  * 3. 狀態提示框改為載入後常駐顯示，並加裝 window.onerror 全域除錯攔截。
+  * 4. 內建 sw.js 註冊支援完全離線 PWA 快取。
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -202,11 +203,12 @@
       border-radius: 8px;
       font-size: 0.9rem;
       margin-top: 12px;
-      display: none;
+      display: block;
       line-height: 1.4;
+      background-color: #e9ecef;
+      color: #495057;
+      border: 1px solid #ced4da;
     }
-    .status-success { background-color: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
-    .status-error { background-color: #f8d7da; color: #842029; border: 1px solid #f5c2c7; }
 
     /* 離線草稿區塊 */
     .draft-section {
@@ -311,7 +313,8 @@
     💾 修改並寫入雲端簡報
   </button>
 
-  <div id="statusBox" class="status-box"></div>
+  <!-- 狀態提示框 (常駐顯示，絕不隱形) -->
+  <div id="statusBox" class="status-box">系統就緒，請輸入密碼後點擊讀取或寫入。</div>
 
   <!-- 7. 本機離線草稿暫存區 (鏡像配置) -->
   <div class="draft-section">
@@ -366,6 +369,12 @@
 <script>
   const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxm7i2Zh80lsjZp5Mf3TkyeEQvurZEcEqHhEdDrbNU7eNbRyalwubozpI5Ed7wcm-XpTg/exec";
 
+  // 全域錯誤監控：若瀏覽器執行報錯，立即直接印在狀態框
+  window.onerror = function(msg, url, line) {
+    showStatus(`系統例外錯誤 (行號 ${line}): ${msg}`, true);
+    return false;
+  };
+
   async function hashPassword(plainText) {
     if (!plainText) return "";
     const encoder = new TextEncoder();
@@ -384,7 +393,6 @@
 
       const callbackName = 'jsonp_cb_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
       const script = document.createElement('script');
-      
       script.crossOrigin = "anonymous";
 
       const queryParams = new URLSearchParams({
@@ -398,7 +406,7 @@
 
       const timer = setTimeout(() => {
         cleanup();
-        reject(new Error("連線逾時：請確認網路連線或 GAS 權限設定為「所有人」。"));
+        reject(new Error("連線逾時 (12秒)：請確認網路連線或 GAS 權限設定為「所有人」。"));
       }, 12000);
 
       function cleanup() {
@@ -418,7 +426,7 @@
 
       script.onerror = () => {
         cleanup();
-        reject(new Error("連線失敗：JSONP 載入失敗，請確認網路連線。"));
+        reject(new Error("網路請求失敗：無法連線至 GAS 後端 (請檢查網路或 GAS 部署狀態)。"));
       };
 
       script.src = fullUrl;
@@ -428,9 +436,12 @@
 
   function showStatus(msg, isError = false) {
     const box = document.getElementById("statusBox");
+    if (!box) return;
     box.style.display = "block";
-    box.className = "status-box " + (isError ? "status-error" : "status-success");
-    box.innerText = msg;
+    box.style.backgroundColor = isError ? "#f8d7da" : "#d1e7dd";
+    box.style.color = isError ? "#842029" : "#0f5132";
+    box.style.border = isError ? "1px solid #f5c2c7" : "1px solid #badbcc";
+    box.innerHTML = (isError ? "❌ " : "✅ ") + msg;
   }
 
   function initDatePicker() {
@@ -447,7 +458,6 @@
     onDateChange();
   }
 
-  /* Chip 標籤點選互動 */
   function toggleChip(el) {
     el.classList.toggle("active");
   }
@@ -459,12 +469,14 @@
 
   function getActiveChips(containerId) {
     const container = document.getElementById(containerId);
+    if (!container) return [];
     const activeNodes = container.querySelectorAll(".chip.active");
     return Array.from(activeNodes).map(node => node.getAttribute("data-sub"));
   }
 
   function setActiveChips(containerId, subjectList) {
     const container = document.getElementById(containerId);
+    if (!container) return;
     const chips = container.querySelectorAll(".chip");
     chips.forEach(chip => {
       const sub = chip.getAttribute("data-sub");
@@ -476,7 +488,6 @@
     });
   }
 
-  /* 離線草稿 (以整日為單位快照) */
   function getDraftKey() {
     const date = document.getElementById("targetDate").value;
     return `contact_daily_draft_${date}`;
@@ -499,12 +510,16 @@
     const key = getDraftKey();
     const saved = localStorage.getItem(key);
     if (saved) {
-      const draftData = JSON.parse(saved);
-      document.getElementById("draftExam").value = draftData.exam || "";
-      document.getElementById("draftHomework").value = draftData.homework || "";
-      document.getElementById("draftNote").value = draftData.note || "";
-      setActiveChips("draftScoreChips", draftData.scoreSubjects || []);
-      updateDraftNotice(true, draftData.timestamp);
+      try {
+        const draftData = JSON.parse(saved);
+        document.getElementById("draftExam").value = draftData.exam || "";
+        document.getElementById("draftHomework").value = draftData.homework || "";
+        document.getElementById("draftNote").value = draftData.note || "";
+        setActiveChips("draftScoreChips", draftData.scoreSubjects || []);
+        updateDraftNotice(true, draftData.timestamp);
+      } catch (e) {
+        updateDraftNotice(false);
+      }
     } else {
       document.getElementById("draftExam").value = "";
       document.getElementById("draftHomework").value = "";
@@ -544,7 +559,7 @@
     const formalScores = new Set([...getActiveChips("formalScoreChips"), ...draftScores]);
     setActiveChips("formalScoreChips", Array.from(formalScores));
 
-    showStatus("⚡ 已一鍵同步整日草稿至正式區！");
+    showStatus("已成功將草稿內容同步至正式區！", false);
   }
 
   function clearDraftForCurrentDate() {
@@ -556,8 +571,117 @@
       document.getElementById("draftNote").value = "";
       setActiveChips("draftScoreChips", []);
       updateDraftNotice(false);
-      showStatus("🧹 已成功清除本日的本機草稿。");
+      showStatus("已成功清除本日的本機草稿。", false);
     }
   }
 
-  function update
+  function updateDraftNotice(hasDraft, timeStr = "") {
+    const notice = document.getElementById("draftNotice");
+    if (!notice) return;
+    if (hasDraft) {
+      notice.innerText = `(已自動暫存於 ${timeStr})`;
+      notice.style.color = "#198754";
+    } else {
+      notice.innerText = "(目前無草稿)";
+      notice.style.color = "#6c757d";
+    }
+  }
+
+  function onDateChange() {
+    loadDraftForCurrentDate();
+    document.getElementById("formalExam").value = "";
+    document.getElementById("formalHomework").value = "";
+    document.getElementById("formalNote").value = "";
+    setActiveChips("formalScoreChips", []);
+    showStatus("已切換同步日期，隨時可點擊讀取或寫入。", false);
+  }
+
+  /* 雲端寫入整日資料 */
+  async function handleWrite() {
+    const rawPwd = document.getElementById("pwd").value.trim();
+    const date = document.getElementById("targetDate").value;
+    const formalExam = document.getElementById("formalExam").value.trim();
+    const formalHomework = document.getElementById("formalHomework").value.trim();
+    const formalNote = document.getElementById("formalNote").value.trim();
+    const activeScoreSubjects = getActiveChips("formalScoreChips").join(",");
+
+    if (!rawPwd) return alert("請輸入驗證密碼！");
+
+    showStatus("正在連線並寫入整日資料至雲端簡報，請稍候...", false);
+
+    try {
+      const hashedPwd = await hashPassword(rawPwd);
+      const res = await sendJsonpRequest("write", {
+        password: rawPwd,
+        hashedPassword: hashedPwd,
+        date: date,
+        exam: formalExam,
+        homework: formalHomework,
+        note: formalNote,
+        scoreSubjects: activeScoreSubjects
+      });
+
+      showStatus(`整日簡報寫入成功！ (${new Date().toLocaleTimeString()})`, false);
+    } catch (err) {
+      showStatus(err.message, true);
+    }
+  }
+
+  /* 雲端讀取整日資料 */
+  async function handleRead() {
+    const rawPwd = document.getElementById("pwd").value.trim();
+    const date = document.getElementById("targetDate").value;
+
+    if (!rawPwd) return alert("請輸入驗證密碼！");
+
+    showStatus("正在連線讀取雲端整日最新簡報內容...", false);
+
+    try {
+      const hashedPwd = await hashPassword(rawPwd);
+      const res = await sendJsonpRequest("read", {
+        password: rawPwd,
+        hashedPassword: hashedPwd,
+        date: date
+      });
+
+      if (res && res.data) {
+        const cloudExam = res.data.exam || "";
+        const cloudHomework = res.data.homework || "";
+        const cloudNote = res.data.note || "";
+        const cloudScores = res.data.scoreSubjects || [];
+
+        const currentExam = document.getElementById("formalExam").value;
+        const currentHomework = document.getElementById("formalHomework").value;
+        const currentNote = document.getElementById("formalNote").value;
+
+        document.getElementById("formalExam").value = smartMergeText(currentExam, cloudExam);
+        document.getElementById("formalHomework").value = smartMergeText(currentHomework, cloudHomework);
+        document.getElementById("formalNote").value = smartMergeText(currentNote, cloudNote);
+        
+        setActiveChips("formalScoreChips", cloudScores);
+
+        showStatus("已成功讀取整日簡報內容 (含成績勾選與備註)！", false);
+      } else {
+        showStatus("雲端讀取完成，該日期尚無紀錄。", false);
+      }
+    } catch (err) {
+      showStatus(err.message, true);
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    initDatePicker();
+    loadDraftForCurrentDate();
+    const box = document.getElementById("statusBox");
+    if (box) {
+      box.style.display = "block";
+      box.style.backgroundColor = "#e9ecef";
+      box.style.color = "#495057";
+      box.style.border = "1px solid #ced4da";
+      box.innerText = "系統已就緒，請輸入密碼後點擊讀取或寫入。";
+    }
+  });
+</script>
+
+</body>
+</html>
