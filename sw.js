@@ -3,7 +3,7 @@
  * 代碼產生日期與時間：2026-07-24 14:03
  */
 
-const CACHE_NAME = 'contact-book-v1';
+const CACHE_NAME = 'contact-book-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html'
