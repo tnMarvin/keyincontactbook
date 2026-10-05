@@ -1,10 +1,10 @@
 <!--
-  * 功能描述：電子聯絡簿寫入系統 - 網頁前端 (對齊簡報表格與備/嘉合併儲存格相容版)
-  * 代碼產生日期與時間：2026-07-24 00:08
+  * 功能描述：電子聯絡簿寫入系統 - 網頁前端 (整頁全覽版：成績多選按鈕組 + 全寬備嘉獨立框 + PWA 離線支援)
+  * 代碼產生日期與時間：2026-10-06 00:55
   * 說明：
-  * 1. 基準維護：以使用者提供之 GitHub 最新 index.html 為基準修正。
-  * 2. UI 互動優化：切換至「備/嘉」時自動停用次要輸入框，避免合併儲存格讀寫資料解析分歧。
-  * 3. 智能附加 (Smart Merge) 強化：避免過度重複與空字串錯置。
+  * 1. 廢除科目下拉選單，頂部提供「今日有成績科目」7 科 Chips 多選點擊組。
+  * 2. 中段並列考試與作業大框，下方全寬橫跨「備註 / 嘉言錄」。
+  * 3. 離線草稿鏡像升級，一鍵暫存與復原整日聯絡簿。
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -21,14 +21,15 @@
         console.warn("無法自動跳脫 iframe，將以當前視窗持續運作。");
       }
     }
-   // 註冊 PWA Service Worker (支援斷線離線開啟介面)
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js')
-        .then(() => console.log('PWA Service Worker 註冊完成，已就緒離線開啟。'))
-        .catch(err => console.warn('Service Worker 註冊失敗：', err));
-    });
-  }
+
+    // 註冊 PWA Service Worker (支援斷線離線開啟介面)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(() => console.log('PWA Service Worker 註冊完成，已就緒離線開啟。'))
+          .catch(err => console.warn('Service Worker 註冊失敗：', err));
+      });
+    }
   </script>
 
   <style>
@@ -67,7 +68,7 @@
 
     .container {
       width: 100%;
-      max-width: 650px;
+      max-width: 680px;
       background: var(--card-bg);
       border-radius: var(--radius);
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
@@ -99,7 +100,6 @@
     input[type="password"],
     input[type="text"],
     input[type="date"],
-    select,
     textarea {
       width: 100%;
       padding: 12px;
@@ -110,15 +110,10 @@
       transition: border-color 0.2s, box-shadow 0.2s;
     }
 
-    input:focus, select:focus, textarea:focus {
+    input:focus, textarea:focus {
       outline: none;
       border-color: #86b7fe;
       box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
-    }
-
-    textarea:disabled {
-      background-color: #e9ecef;
-      cursor: not-allowed;
     }
 
     .date-row {
@@ -132,17 +127,33 @@
       cursor: pointer;
     }
 
-    .checkbox-group {
+    /* 多選科目標籤 (Chips) */
+    .chip-container {
       display: flex;
-      align-items: center;
+      flex-wrap: wrap;
       gap: 8px;
-      margin: 16px 0;
-      font-size: 0.95rem;
-      cursor: pointer;
-      user-select: none;
+      margin-top: 4px;
     }
 
-    .checkbox-group input { width: 18px; height: 18px; cursor: pointer; }
+    .chip {
+      padding: 8px 14px;
+      border-radius: 20px;
+      border: 1px solid #ced4da;
+      background-color: #fff;
+      color: #495057;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s ease;
+    }
+
+    .chip.active {
+      background-color: #198754;
+      border-color: #198754;
+      color: #fff;
+      box-shadow: 0 2px 6px rgba(25, 135, 84, 0.3);
+    }
 
     .grid-2col {
       display: grid;
@@ -254,42 +265,41 @@
     <label for="targetDate">📅 選擇同步日期：</label>
     <div class="date-row">
       <button class="btn btn-sm btn-secondary" onclick="shiftDate(-1)">◀ 前一天</button>
-      <input type="date" id="targetDate" onchange="onDateOrSubjectChange()">
+      <input type="date" id="targetDate" onchange="onDateChange()">
       <button class="btn btn-sm btn-secondary" onclick="shiftDate(1)">後一天 ▶</button>
     </div>
   </div>
 
-  <!-- 3. 科目選擇 (包含 備/嘉 完整對齊) -->
+  <!-- 3. 上方：今日有成績科目多選點選組 -->
   <div class="form-group">
-    <label for="subject">🧩 選擇科目 / 欄位：</label>
-    <select id="subject" onchange="onDateOrSubjectChange()">
-      <option value="國文">國文</option>
-      <option value="英語">英語</option>
-      <option value="數學">數學</option>
-      <option value="自然">自然</option>
-      <option value="歷史">歷史</option>
-      <option value="地理">地理</option>
-      <option value="公民">公民</option>
-      <option value="備/嘉">備/嘉</option>
-    </select>
+    <label>📊 今日有成績科目（點選以切換）：</label>
+    <div class="chip-container" id="formalScoreChips">
+      <div class="chip" data-sub="國文" onclick="toggleChip(this)">國文</div>
+      <div class="chip" data-sub="英語" onclick="toggleChip(this)">英語</div>
+      <div class="chip" data-sub="數學" onclick="toggleChip(this)">數學</div>
+      <div class="chip" data-sub="自然" onclick="toggleChip(this)">自然</div>
+      <div class="chip" data-sub="歷史" onclick="toggleChip(this)">歷史</div>
+      <div class="chip" data-sub="地理" onclick="toggleChip(this)">地理</div>
+      <div class="chip" data-sub="公民" onclick="toggleChip(this)">公民</div>
+    </div>
   </div>
 
-  <!-- 4. 正式區：今日有成績勾選框 -->
-  <label class="checkbox-group" id="scoreCheckboxContainer">
-    <input type="checkbox" id="hasScore">
-    📊 此科目今日有成績（正式區：有勾選送出顯示「有」）
-  </label>
-
-  <!-- 5. 正式輸入區：考試與作業 -->
+  <!-- 4. 中段：正式考試與作業內容 -->
   <div class="grid-2col form-group">
     <div>
-      <label for="formalExam" id="labelFormalExam">📌 正式考試內容：</label>
-      <textarea id="formalExam" rows="4" placeholder="要寫入簡報的考試內容 (可換行)..."></textarea>
+      <label for="formalExam">📌 正式考試內容：</label>
+      <textarea id="formalExam" rows="7" placeholder="輸入今日/段考考試彙整 (可換行)..."></textarea>
     </div>
     <div>
-      <label for="formalHomework" id="labelFormalHomework">✍️ 正式作業內容 / 備註：</label>
-      <textarea id="formalHomework" rows="4" placeholder="要寫入簡報的作業或備註內容 (可換行)..."></textarea>
+      <label for="formalHomework">✍️ 正式作業內容：</label>
+      <textarea id="formalHomework" rows="7" placeholder="輸入今日/各科作業彙整 (可換行)..."></textarea>
     </div>
+  </div>
+
+  <!-- 5. 下方：全寬度 備註 / 嘉言錄 -->
+  <div class="form-group">
+    <label for="formalNote">📝 備註 / 嘉言錄（最下方橫跨整欄）：</label>
+    <textarea id="formalNote" rows="2" placeholder="輸入班費、講義費、宣導注意事項或嘉言錄..."></textarea>
   </div>
 
   <!-- 6. 主要操作按鈕 -->
@@ -303,40 +313,50 @@
 
   <div id="statusBox" class="status-box"></div>
 
-  <!-- 7. 本機離線草稿暫存區 -->
+  <!-- 7. 本機離線草稿暫存區 (鏡像配置) -->
   <div class="draft-section">
     <div class="draft-header">
       <div class="draft-title">💾 本機離線草稿暫存區</div>
-      <div class="draft-status" id="draftNotice">(目前此科目無草稿)</div>
+      <div class="draft-status" id="draftNotice">(目前無草稿)</div>
     </div>
 
-    <!-- 暫存區：今日有成績勾選紀錄 -->
-    <label class="checkbox-group" style="margin-top:0;" id="draftScoreCheckboxContainer">
-      <input type="checkbox" id="draftHasScore" onchange="autoSaveDraft()">
-      📊 此科目今日有成績（草稿暫存）
-    </label>
-    
-    <div class="grid-2col">
-      <div class="form-group" style="margin-bottom:0;">
-        <label for="draftExam" id="labelDraftExam">📌 暫存考試：</label>
-        <textarea id="draftExam" rows="3" placeholder="斷線時可在此輸入考試草稿..." oninput="autoSaveDraft()"></textarea>
-      </div>
-
-      <div class="form-group" style="margin-bottom:0;">
-        <label for="draftHomework" id="labelDraftHomework">✍️ 暫存作業 / 備註：</label>
-        <textarea id="draftHomework" rows="3" placeholder="斷線時可在此輸入作業草稿..." oninput="autoSaveDraft()"></textarea>
+    <div class="form-group" style="margin-bottom:12px;">
+      <label>📊 暫存：有成績科目：</label>
+      <div class="chip-container" id="draftScoreChips">
+        <div class="chip" data-sub="國文" onclick="toggleDraftChip(this)">國文</div>
+        <div class="chip" data-sub="英語" onclick="toggleDraftChip(this)">英語</div>
+        <div class="chip" data-sub="數學" onclick="toggleDraftChip(this)">數學</div>
+        <div class="chip" data-sub="自然" onclick="toggleDraftChip(this)">自然</div>
+        <div class="chip" data-sub="歷史" onclick="toggleDraftChip(this)">歷史</div>
+        <div class="chip" data-sub="地理" onclick="toggleDraftChip(this)">地理</div>
+        <div class="chip" data-sub="公民" onclick="toggleDraftChip(this)">公民</div>
       </div>
     </div>
 
-    <!-- 草稿控制按鈕 -->
+    <div class="grid-2col form-group" style="margin-bottom:12px;">
+      <div>
+        <label for="draftExam">📌 暫存考試：</label>
+        <textarea id="draftExam" rows="4" placeholder="離線時輸入考試草稿..." oninput="autoSaveDraft()"></textarea>
+      </div>
+      <div>
+        <label for="draftHomework">✍️ 暫存作業：</label>
+        <textarea id="draftHomework" rows="4" placeholder="離線時輸入作業草稿..." oninput="autoSaveDraft()"></textarea>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:12px;">
+      <label for="draftNote">📝 暫存備註 / 嘉言錄：</label>
+      <textarea id="draftNote" rows="2" placeholder="離線時輸入備註草稿..." oninput="autoSaveDraft()"></textarea>
+    </div>
+
     <div class="action-row">
       <button class="btn btn-sm btn-warning" onclick="copyDraftToFormal()">
-        ⚡ 一鍵複製暫存內容到正式區 (有內容則附加)
+        ⚡ 一鍵複製暫存內容到正式區
       </button>
-      <button class="btn btn-sm btn-secondary" onclick="loadDraftForCurrentSubject()">
+      <button class="btn btn-sm btn-secondary" onclick="loadDraftForCurrentDate()">
         🔄 讀取暫存
       </button>
-      <button class="btn btn-sm btn-danger" onclick="clearDraftForCurrentSubject()">
+      <button class="btn btn-sm btn-danger" onclick="clearDraftForCurrentDate()">
         🗑️ 清除暫存
       </button>
     </div>
@@ -424,13 +444,42 @@
     const currentDate = new Date(dateInput.value || new Date());
     currentDate.setDate(currentDate.getDate() + offset);
     dateInput.value = currentDate.toISOString().split('T')[0];
-    onDateOrSubjectChange();
+    onDateChange();
   }
 
+  /* Chip 標籤點選互動 */
+  function toggleChip(el) {
+    el.classList.toggle("active");
+  }
+
+  function toggleDraftChip(el) {
+    el.classList.toggle("active");
+    autoSaveDraft();
+  }
+
+  function getActiveChips(containerId) {
+    const container = document.getElementById(containerId);
+    const activeNodes = container.querySelectorAll(".chip.active");
+    return Array.from(activeNodes).map(node => node.getAttribute("data-sub"));
+  }
+
+  function setActiveChips(containerId, subjectList) {
+    const container = document.getElementById(containerId);
+    const chips = container.querySelectorAll(".chip");
+    chips.forEach(chip => {
+      const sub = chip.getAttribute("data-sub");
+      if (subjectList && subjectList.includes(sub)) {
+        chip.classList.add("active");
+      } else {
+        chip.classList.remove("active");
+      }
+    });
+  }
+
+  /* 離線草稿 (以整日為單位快照) */
   function getDraftKey() {
-    const subject = document.getElementById("subject").value;
     const date = document.getElementById("targetDate").value;
-    return `contact_draft_${date}_${subject}`;
+    return `contact_daily_draft_${date}`;
   }
 
   function autoSaveDraft() {
@@ -438,26 +487,29 @@
     const draftData = {
       exam: document.getElementById("draftExam").value,
       homework: document.getElementById("draftHomework").value,
-      hasScore: document.getElementById("draftHasScore").checked,
+      note: document.getElementById("draftNote").value,
+      scoreSubjects: getActiveChips("draftScoreChips"),
       timestamp: new Date().toLocaleTimeString()
     };
     localStorage.setItem(key, JSON.stringify(draftData));
     updateDraftNotice(true, draftData.timestamp);
   }
 
-  function loadDraftForCurrentSubject() {
+  function loadDraftForCurrentDate() {
     const key = getDraftKey();
     const saved = localStorage.getItem(key);
     if (saved) {
       const draftData = JSON.parse(saved);
       document.getElementById("draftExam").value = draftData.exam || "";
       document.getElementById("draftHomework").value = draftData.homework || "";
-      document.getElementById("draftHasScore").checked = !!draftData.hasScore;
+      document.getElementById("draftNote").value = draftData.note || "";
+      setActiveChips("draftScoreChips", draftData.scoreSubjects || []);
       updateDraftNotice(true, draftData.timestamp);
     } else {
       document.getElementById("draftExam").value = "";
       document.getElementById("draftHomework").value = "";
-      document.getElementById("draftHasScore").checked = false;
+      document.getElementById("draftNote").value = "";
+      setActiveChips("draftScoreChips", []);
       updateDraftNotice(false);
     }
   }
@@ -474,164 +526,38 @@
   function copyDraftToFormal() {
     const draftExam = document.getElementById("draftExam").value;
     const draftHomework = document.getElementById("draftHomework").value;
-    const draftHasScore = document.getElementById("draftHasScore").checked;
+    const draftNote = document.getElementById("draftNote").value;
+    const draftScores = getActiveChips("draftScoreChips");
 
-    if (!draftExam && !draftHomework && !draftHasScore) {
+    if (!draftExam && !draftHomework && !draftNote && draftScores.length === 0) {
       return alert("目前草稿區尚無內容可複製！");
     }
 
-    const currentFormalExam = document.getElementById("formalExam").value;
-    const currentFormalHomework = document.getElementById("formalHomework").value;
+    const currentExam = document.getElementById("formalExam").value;
+    const currentHomework = document.getElementById("formalHomework").value;
+    const currentNote = document.getElementById("formalNote").value;
 
-    document.getElementById("formalExam").value = smartMergeText(currentFormalExam, draftExam);
-    document.getElementById("formalHomework").value = smartMergeText(currentFormalHomework, draftHomework);
-    
-    if (draftHasScore) {
-      document.getElementById("hasScore").checked = true;
-    }
+    document.getElementById("formalExam").value = smartMergeText(currentExam, draftExam);
+    document.getElementById("formalHomework").value = smartMergeText(currentHomework, draftHomework);
+    document.getElementById("formalNote").value = smartMergeText(currentNote, draftNote);
 
-    showStatus("⚡ 已完成草稿同步！(若正式區已有內容已自動換行附加)");
+    const formalScores = new Set([...getActiveChips("formalScoreChips"), ...draftScores]);
+    setActiveChips("formalScoreChips", Array.from(formalScores));
+
+    showStatus("⚡ 已一鍵同步整日草稿至正式區！");
   }
 
-  function clearDraftForCurrentSubject() {
+  function clearDraftForCurrentDate() {
     const key = getDraftKey();
-    if (confirm("確定要清除此科目的本機暫存草稿嗎？")) {
+    if (confirm("確定要清除本日的本機暫存草稿嗎？")) {
       localStorage.removeItem(key);
       document.getElementById("draftExam").value = "";
       document.getElementById("draftHomework").value = "";
-      document.getElementById("draftHasScore").checked = false;
+      document.getElementById("draftNote").value = "";
+      setActiveChips("draftScoreChips", []);
       updateDraftNotice(false);
-      showStatus("🧹 已成功清除該科目的本機草稿。");
+      showStatus("🧹 已成功清除本日的本機草稿。");
     }
   }
 
-  function updateDraftNotice(hasDraft, timeStr = "") {
-    const notice = document.getElementById("draftNotice");
-    if (hasDraft) {
-      notice.innerText = `(已自動暫存於 ${timeStr})`;
-      notice.style.color = "#198754";
-    } else {
-      notice.innerText = "(目前此科目無草稿)";
-      notice.style.color = "#6c757d";
-    }
-  }
-
-  /**
-   * 科目切換邏輯：若切換到「備/嘉」(合併儲存格)，自動調適 UI
-   */
-  function adaptUIForSubject() {
-    const subject = document.getElementById("subject").value;
-    const isMergeCell = (subject === "備/嘉");
-
-    const formalHomework = document.getElementById("formalHomework");
-    const draftHomework = document.getElementById("draftHomework");
-
-    if (isMergeCell) {
-      document.getElementById("labelFormalExam").innerText = "📌 備註 / 嘉獎 內容：";
-      document.getElementById("labelFormalHomework").innerText = "✍️ (合併儲存格：請於左側輸入)";
-      formalHomework.value = "";
-      formalHomework.disabled = true;
-
-      document.getElementById("labelDraftExam").innerText = "📌 暫存備註 / 嘉獎：";
-      document.getElementById("labelDraftHomework").innerText = "✍️ (合併儲存格：請於左側輸入)";
-      draftHomework.value = "";
-      draftHomework.disabled = true;
-    } else {
-      document.getElementById("labelFormalExam").innerText = "📌 正式考試內容：";
-      document.getElementById("labelFormalHomework").innerText = "✍️ 正式作業內容 / 備註：";
-      formalHomework.disabled = false;
-
-      document.getElementById("labelDraftExam").innerText = "📌 暫存考試：";
-      document.getElementById("labelDraftHomework").innerText = "✍️ 暫存作業 / 備註：";
-      draftHomework.disabled = false;
-    }
-  }
-
-  function onDateOrSubjectChange() {
-    adaptUIForSubject();
-    loadDraftForCurrentSubject();
-    document.getElementById("formalExam").value = "";
-    document.getElementById("formalHomework").value = "";
-    document.getElementById("hasScore").checked = false;
-  }
-
-  async function handleWrite() {
-    const rawPwd = document.getElementById("pwd").value.trim();
-    const date = document.getElementById("targetDate").value;
-    const subject = document.getElementById("subject").value;
-    const hasScore = document.getElementById("hasScore").checked ? "有" : "無";
-    const formalExam = document.getElementById("formalExam").value.trim();
-    const formalHomework = document.getElementById("formalHomework").value.trim();
-
-    if (!rawPwd) return alert("請輸入驗證密碼！");
-
-    showStatus("正在連線並覆蓋資料至雲端簡報...", false);
-
-    try {
-      const hashedPwd = await hashPassword(rawPwd);
-      const res = await sendJsonpRequest("write", {
-        password: rawPwd,
-        hashedPassword: hashedPwd,
-        date: date,
-        subject: subject,
-        hasScore: hasScore,
-        exam: formalExam,
-        homework: formalHomework
-      });
-
-      showStatus(`✅ 雲端簡報寫入成功！ (${new Date().toLocaleTimeString()})`);
-    } catch (err) {
-      showStatus(`❌ ${err.message}`, true);
-    }
-  }
-
-  async function handleRead() {
-    const rawPwd = document.getElementById("pwd").value.trim();
-    const date = document.getElementById("targetDate").value;
-    const subject = document.getElementById("subject").value;
-
-    if (!rawPwd) return alert("請輸入驗證密碼！");
-
-    showStatus("正在讀取雲端最新簡報內容...", false);
-
-    try {
-      const hashedPwd = await hashPassword(rawPwd);
-      const res = await sendJsonpRequest("read", {
-        password: rawPwd,
-        hashedPassword: hashedPwd,
-        date: date,
-        subject: subject
-      });
-
-      if (res && res.data) {
-        const cloudExamVal = res.data.exam || "";
-        const cloudHomeworkVal = res.data.homework || "";
-        const isScore = (res.data.hasScore === "有");
-
-        const currentFormalExam = document.getElementById("formalExam").value;
-        const currentFormalHomework = document.getElementById("formalHomework").value;
-
-        document.getElementById("formalExam").value = smartMergeText(currentFormalExam, cloudExamVal);
-        document.getElementById("formalHomework").value = smartMergeText(currentFormalHomework, cloudHomeworkVal);
-        if (isScore) {
-          document.getElementById("hasScore").checked = true;
-        }
-
-        showStatus("✅ 已成功讀取雲端內容並載入至正式區！");
-      } else {
-        showStatus("⚠️ 雲端讀取完成，該日期與科目尚無紀錄。");
-      }
-    } catch (err) {
-      showStatus(`❌ ${err.message}`, true);
-    }
-  }
-
-  window.addEventListener("DOMContentLoaded", () => {
-    initDatePicker();
-    adaptUIForSubject();
-    loadDraftForCurrentSubject();
-  });
-</script>
-
-</body>
-</html>
+  function update
