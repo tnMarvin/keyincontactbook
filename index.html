@@ -1,820 +1,277 @@
-<!--
-  功能說明：電子聯絡簿系統 - 自訂每小時同步分鐘數 + 常駐非彈出式排程訊息條 + 背景 Worker
-  代碼產生日期與時間：2026-10-06 07:18
--->
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>電子聯絡簿寫入系統</title>
-  <script>
-    if (window.top !== window.self) {
-      try {
-        window.top.location.href = window.location.href;
-      } catch (e) {
-        console.warn("無法跳脫 iframe，維持當前視窗模式");
-      }
+/**
+ * 功能描述：電子聯絡簿系統 - GAS 後端旗艦版 (支援 ping 連線探針 + 動態定位表頭 + 大合併與成績矩陣)
+ * 代碼產生日期與時間：2026-10-06 20:20
+ */
+
+const CONFIG = {
+  GITHUB_HTML_URL: "https://tnmarvin.github.io/keyincontactbook/index.html"
+};
+
+function doGet(e) {
+  var params = (e && e.parameter) ? e.parameter : {};
+  var action = params.action;
+
+  if (action) {
+    return handleApiRequest(params);
+  }
+
+  try {
+    var response = UrlFetchApp.fetch(CONFIG.GITHUB_HTML_URL, { muteHttpExceptions: true });
+    if (response.getResponseCode() !== 200) {
+      throw new Error("無法取得 GitHub 頁面，HTTP 狀態碼：" + response.getResponseCode());
+    }
+    return HtmlService.createHtmlOutput(response.getContentText())
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  } catch (err) {
+    return HtmlService.createHtmlOutput("<h2>⚠️ 系統連線提示</h2><p>錯誤細節：" + err.message + "</p>");
+  }
+}
+
+function handleApiRequest(params) {
+  var action = params.action;
+  var callback = params.callback || "callback";
+  var result = { status: "error", message: "未知的請求" };
+
+  try {
+    // 1. 輕量連線探針 (Ping)：不需密碼驗證，用於前端確認校園網路是否連通
+    if (action === "ping") {
+      result = { status: "success", message: "pong", timestamp: Date.now() };
+      return buildJsonpResponse(callback, result);
     }
 
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js')
-          .catch(err => console.warn('Service Worker 註冊略過：', err));
-      });
-    }
-  </script>
-  <style>
-    :root {
-      --primary-green: #0f5132;
-      --btn-green: #198754;
-      --btn-green-hover: #146c43;
-      --btn-dark: #212529;
-      --btn-dark-hover: #1c1f23;
-      --btn-warning: #ffc107;
-      --btn-danger: #dc3545;
-      --btn-secondary: #6c757d;
-      --bg-color: #f8f9fa;
-      --card-bg: #ffffff;
-      --text-color: #212529;
-      --border-color: #dee2e6;
-      --draft-border: #dc3545;
-      --radius: 12px;
+    // 2. 其餘讀寫操作皆須嚴格驗證密碼
+    if (!validateAuth(params.password)) {
+      result = { status: "error", message: "身份驗證失敗：密碼錯誤或權限不足" };
+      return buildJsonpResponse(callback, result);
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background-color: var(--bg-color);
-      color: var(--text-color);
-      padding: 20px 16px;
-      display: flex;
-      justify-content: center;
-      min-height: 100vh;
+    switch (action) {
+      case "read":
+        result = readContactBookData(params.date);
+        break;
+      case "write":
+        result = writeContactBookData(params);
+        break;
+      default:
+        result = { status: "error", message: "未知的 action 請求：" + action };
     }
+  } catch (err) {
+    result = { status: "error", message: "後端處理例外：" + err.message };
+  }
 
-    .container {
-      width: 100%;
-      max-width: 680px;
-      background: var(--card-bg);
-      border-radius: var(--radius);
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-      padding: 24px;
-    }
+  return buildJsonpResponse(callback, result);
+}
 
-    h2 {
-      text-align: center;
-      font-size: 1.5rem;
-      margin-bottom: 20px;
-    }
+function validateAuth(clientPwd) {
+  if (!clientPwd) return false;
+  var props = PropertiesService.getScriptProperties();
+  var adminPwd = props.getProperty('ADMIN_PASSWORD');
+  var limitedPwd = props.getProperty('LIMITED_PASSWORD');
+  var input = String(clientPwd).trim();
 
-    .form-group { margin-bottom: 18px; }
+  if (adminPwd && input === adminPwd.trim()) return true;
+  if (limitedPwd && input === limitedPwd.trim()) return true;
+  return false;
+}
 
-    label {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-weight: 600;
-      font-size: 0.95rem;
-      margin-bottom: 8px;
-    }
+function cleanText(str) {
+  if (!str) return "";
+  return String(str).replace(/\s+/g, '').trim();
+}
 
-    input[type="password"],
-    input[type="date"],
-    input[type="number"],
-    textarea {
-      width: 100%;
-      padding: 12px;
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      font-size: 1rem;
-      background-color: #fff;
-    }
+function readContactBookData(targetDate) {
+  if (!targetDate) targetDate = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd");
 
-    input:focus, textarea:focus {
-      outline: none;
-      border-color: #86b7fe;
-      box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
-    }
+  var props = PropertiesService.getScriptProperties();
+  var slideId = props.getProperty('SLIDE_ID');
+  if (!slideId) throw new Error("未設定 SLIDE_ID 指令碼屬性。");
 
-    .date-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
+  var presentation = SlidesApp.openById(slideId);
+  var slides = presentation.getSlides();
+  var target8DigitDate = cleanText(targetDate).replace(/-/g, '');
 
-    .date-row input[type="date"] {
-      flex: 1;
-      cursor: pointer;
-    }
-
-    /* 自動排程設定列 */
-    .schedule-bar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      background-color: #e7f1ff;
-      border: 1px solid #b6d4fe;
-      padding: 10px 14px;
-      border-radius: 8px;
-      margin-bottom: 18px;
-      font-size: 0.9rem;
-      color: #084298;
-    }
-
-    .schedule-bar input[type="number"] {
-      width: 70px;
-      padding: 6px 8px;
-      font-size: 0.95rem;
-      text-align: center;
-      display: inline-block;
-    }
-
-    /* 常駐非彈跳訊息框 (In-page Message Box) */
-    .inline-msg-box {
-      padding: 12px 14px;
-      border-radius: 8px;
-      font-size: 0.9rem;
-      margin-bottom: 18px;
-      background-color: #f8f9fa;
-      border: 1px solid #ced4da;
-      color: #495057;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      transition: background-color 0.3s, border-color 0.3s;
-    }
-    .inline-msg-box.active {
-      background-color: #e8f5e9;
-      border-color: #a5d6a7;
-      color: #1b5e20;
-    }
-
-    .chip-container {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 4px;
-    }
-
-    .chip {
-      padding: 8px 14px;
-      border-radius: 20px;
-      border: 1px solid #ced4da;
-      background-color: #fff;
-      color: #495057;
-      font-size: 0.9rem;
-      font-weight: 600;
-      cursor: pointer;
-      user-select: none;
-      transition: all 0.2s ease;
-    }
-
-    .chip.active {
-      background-color: var(--btn-green);
-      border-color: var(--btn-green);
-      color: #fff;
-    }
-
-    .grid-2col {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-
-    .btn {
-      width: 100%;
-      padding: 14px;
-      border: none;
-      border-radius: 8px;
-      font-size: 1rem;
-      font-weight: 700;
-      color: #fff;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-
-    .btn:active { transform: scale(0.99); }
-    .btn-submit { background-color: var(--btn-green); }
-    .btn-submit:hover { background-color: var(--btn-green-hover); }
-    .btn-preview { background-color: var(--btn-dark); }
-    .btn-preview:hover { background-color: var(--btn-dark-hover); }
-
-    .btn-sm {
-      width: auto;
-      padding: 8px 12px;
-      font-size: 0.85rem;
-      margin-bottom: 0;
-    }
-    .btn-warning { background-color: var(--btn-warning); color: #000; }
-    .btn-danger { background-color: var(--btn-danger); }
-    .btn-secondary { background-color: var(--btn-secondary); }
-
-    .status-box {
-      padding: 12px 16px;
-      border-radius: 8px;
-      font-size: 0.9rem;
-      margin-top: 12px;
-      display: block;
-      line-height: 1.4;
-      background-color: #e9ecef;
-      color: #495057;
-      border: 1px solid #ced4da;
-    }
-
-    .draft-section {
-      margin-top: 28px;
-      border: 2px dashed var(--draft-border);
-      border-radius: var(--radius);
-      padding: 18px;
-      background-color: #fff8f8;
-    }
-
-    .draft-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-
-    .draft-title {
-      font-weight: 700;
-      color: #b02a37;
-    }
-
-    .draft-status { font-size: 0.825rem; color: #6c757d; }
-
-    .action-row {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-      flex-wrap: wrap;
-      margin-top: 12px;
-    }
-
-    @media (max-width: 520px) {
-      .grid-2col { grid-template-columns: 1fr; }
-      .schedule-bar { flex-direction: column; align-items: flex-start; }
-      .action-row { flex-direction: column; }
-      .action-row .btn-sm { width: 100%; }
-    }
-  </style>
-</head>
-<body>
-
-<div class="container">
-  <h2>📝 電子聯絡簿寫入系統</h2>
-  
-  <div class="form-group">
-    <label for="pwd">🔑 請輸入授權密碼：</label>
-    <input type="password" id="pwd" placeholder="驗證身分以進行同步...">
-  </div>
-
-  <div class="form-group">
-    <label for="targetDate">📅 選擇同步日期：</label>
-    <div class="date-row">
-      <button class="btn btn-sm btn-secondary" onclick="shiftDate(-1)">◀ 前一天</button>
-      <input type="date" id="targetDate" onchange="onDateChange()">
-      <button class="btn btn-sm btn-secondary" onclick="shiftDate(1)">後一天 ▶</button>
-    </div>
-  </div>
-
-  <!-- 自訂每小時幾分同步設定列 -->
-  <div class="schedule-bar">
-    <span>⏱️ 自動背景同步時間：每小時的第</span>
-    <input type="number" id="syncMinuteInput" min="0" max="59" value="30" onchange="onSyncMinuteChanged()">
-    <span>分鐘整自動上傳</span>
-  </div>
-
-  <!-- 常駐非彈出式排程訊息框 -->
-  <div id="inlineMsgBox" class="inline-msg-box">
-    <span id="inlineMsgContent">⏳ 正在計算下次排程時間...</span>
-    <span id="countdownBadge" style="font-weight: 700; font-family: monospace;">--:--</span>
-  </div>
-
-  <!-- 上方：成績科目多選標籤 -->
-  <div class="form-group">
-    <label>📊 今日有成績科目：</label>
-    <div class="chip-container" id="formalScoreChips">
-      <div class="chip" data-sub="國文" onclick="toggleChip(this)">國文</div>
-      <div class="chip" data-sub="英語" onclick="toggleChip(this)">英語</div>
-      <div class="chip" data-sub="數學" onclick="toggleChip(this)">數學</div>
-      <div class="chip" data-sub="自然" onclick="toggleChip(this)">自然</div>
-      <div class="chip" data-sub="歷史" onclick="toggleChip(this)">歷史</div>
-      <div class="chip" data-sub="地理" onclick="toggleChip(this)">地理</div>
-      <div class="chip" data-sub="公民" onclick="toggleChip(this)">公民</div>
-    </div>
-  </div>
-
-  <!-- 中段：考試與作業 -->
-  <div class="grid-2col form-group">
-    <div>
-      <label for="formalExam">📌 正式考試內容：</label>
-      <textarea id="formalExam" rows="7" placeholder="輸入今日考試彙整..."></textarea>
-    </div>
-    <div>
-      <label for="formalHomework">✍️ 正式作業內容：</label>
-      <textarea id="formalHomework" rows="7" placeholder="輸入今日作業彙整..."></textarea>
-    </div>
-  </div>
-
-  <!-- 下方：全寬 備/嘉 欄位 -->
-  <div class="form-group">
-    <label for="formalNote">📝 備註 / 嘉言錄（底端橫跨）：</label>
-    <textarea id="formalNote" rows="2" placeholder="輸入注意事項或嘉言錄..."></textarea>
-  </div>
-
-  <button class="btn btn-preview" onclick="handleRead()">☁️ 讀取雲端投影片內容</button> 
-  <button class="btn btn-submit" onclick="handleWrite()">💾 修改並寫入雲端簡報</button>
-
-  <div id="statusBox" class="status-box">系統就緒，背景 Worker 已待命。</div>
-
-  <!-- 離線草稿區塊 (鏡像配置) -->
-  <div class="draft-section">
-    <div class="draft-header">
-      <div class="draft-title">💾 本機離線草稿暫存區</div>
-      <div class="draft-status" id="draftNotice">(目前無草稿)</div>
-    </div>
-
-    <div class="form-group" style="margin-bottom:12px;">
-      <label>📊 暫存：有成績科目：</label>
-      <div class="chip-container" id="draftScoreChips">
-        <div class="chip" data-sub="國文" onclick="toggleDraftChip(this)">國文</div>
-        <div class="chip" data-sub="英語" onclick="toggleDraftChip(this)">英語</div>
-        <div class="chip" data-sub="數學" onclick="toggleDraftChip(this)">數學</div>
-        <div class="chip" data-sub="自然" onclick="toggleDraftChip(this)">自然</div>
-        <div class="chip" data-sub="歷史" onclick="toggleDraftChip(this)">歷史</div>
-        <div class="chip" data-sub="地理" onclick="toggleDraftChip(this)">地理</div>
-        <div class="chip" data-sub="公民" onclick="toggleDraftChip(this)">公民</div>
-      </div>
-    </div>
-
-    <div class="grid-2col form-group" style="margin-bottom:12px;">
-      <div>
-        <label for="draftExam">📌 暫存考試：</label>
-        <textarea id="draftExam" rows="4" placeholder="離線時輸入考試草稿..." oninput="autoSaveDraft()"></textarea>
-      </div>
-      <div>
-        <label for="draftHomework">✍️️ 暫存作業：</label>
-        <textarea id="draftHomework" rows="4" placeholder="離線時輸入作業草稿..." oninput="autoSaveDraft()"></textarea>
-      </div>
-    </div>
-
-    <div class="form-group" style="margin-bottom:12px;">
-      <label for="draftNote">📝 暫存備註 / 嘉言錄：</label>
-      <textarea id="draftNote" rows="2" placeholder="離線時輸入備註草稿..." oninput="autoSaveDraft()"></textarea>
-    </div>
-
-    <div class="action-row">
-      <button class="btn btn-sm btn-warning" onclick="copyDraftToFormal()">⚡ 一鍵複製草稿到正式區</button>
-      <button class="btn btn-sm btn-secondary" onclick="loadDraftForCurrentDate()">🔄 載入草稿</button>
-      <button class="btn btn-sm btn-danger" onclick="clearDraftForCurrentDate()">🗑️ 清除草稿</button>
-    </div>
-  </div>
-</div>
-
-<script>
-  const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxm7i2Zh80lsjZp5Mf3TkyeEQvurZEcEqHhEdDrbNU7eNbRyalwubozpI5Ed7wcm-XpTg/exec";
-
-  let targetMinute = 30; // 預設 30 分
-  let nextTargetSyncTimestamp = 0;
-  let lastSyncedDataHash = "";
-  let bgWorker = null;
-
-  window.onerror = function(msg, url, line) {
-    showStatus(`執行異常 (行號 ${line}): ${msg}`, true);
-    return false;
+  var foundData = {
+    exam: "",
+    homework: "",
+    note: "",
+    scoreSubjects: []
   };
 
-  async function hashPassword(plainText) {
-    if (!plainText) return "";
-    const encoder = new TextEncoder();
-    const data = encoder.encode(plainText);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-  }
+  for (var i = 0; i < slides.length; i++) {
+    var slide = slides[i];
+    var notesText = "";
+    try {
+      notesText = cleanText(slide.getNotesPage().getSpeakerNotesShape().getText().asString());
+    } catch (e) {}
 
-  function sendJsonpRequest(action, dataParams = {}) {
-    return new Promise((resolve, reject) => {
-      const callbackName = 'jsonp_cb_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
-      const script = document.createElement('script');
-      script.crossOrigin = "anonymous";
+    if (notesText.indexOf(target8DigitDate) !== -1) {
+      var tables = slide.getTables();
+      for (var t = 0; t < tables.length; t++) {
+        var table = tables[t];
+        var numRows = table.getNumRows();
 
-      const queryParams = new URLSearchParams({
-        action: action,
-        callback: callbackName,
-        _ts: Date.now(),
-        ...dataParams
-      });
-
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error("連線逾時 (12秒)：可能正處於斷網週期。"));
-      }, 12000);
-
-      function cleanup() {
-        clearTimeout(timer);
-        if (window[callbackName]) delete window[callbackName];
-        if (script.parentNode) script.parentNode.removeChild(script);
-      }
-
-      window[callbackName] = (response) => {
-        cleanup();
-        if (response && response.status === "error") {
-          reject(new Error(response.message || "處理錯誤"));
-        } else {
-          resolve(response);
+        var contentStartRow = 1;
+        for (var r = 0; r < numRows; r++) {
+          try {
+            var c0 = cleanText(table.getCell(r, 0).getText().asString());
+            if (c0.indexOf("國文") !== -1) {
+              contentStartRow = r;
+              break;
+            }
+          } catch (e) {}
         }
-      };
 
-      script.onerror = () => {
-        cleanup();
-        reject(new Error("網路中斷，內容已保留於本機。"));
-      };
+        try {
+          foundData.exam = table.getCell(contentStartRow, 1).getText().asString().trim();
+        } catch (e) {}
+        try {
+          foundData.homework = table.getCell(contentStartRow, 2).getText().asString().trim();
+        } catch (e) {}
 
-      script.src = `${GAS_WEB_APP_URL}?${queryParams.toString()}`;
-      document.body.appendChild(script);
-    });
-  }
+        var allSubjects = ["國文", "英語", "數學", "自然", "歷史", "地理", "公民"];
+        for (var r = 0; r < numRows; r++) {
+          try {
+            var subName = cleanText(table.getCell(r, 0).getText().asString());
+            for (var s = 0; s < allSubjects.length; s++) {
+              if (subName.indexOf(allSubjects[s]) !== -1) {
+                if (table.getNumColumns() > 3) {
+                  var scoreVal = cleanText(table.getCell(r, 3).getText().asString());
+                  if (scoreVal.indexOf("有") !== -1) {
+                    foundData.scoreSubjects.push(allSubjects[s]);
+                  }
+                }
+                break;
+              }
+            }
+          } catch (e) {}
+        }
 
-  function showStatus(msg, isError = false) {
-    const box = document.getElementById("statusBox");
-    if (!box) return;
-    box.style.display = "block";
-    box.style.backgroundColor = isError ? "#f8d7da" : "#d1e7dd";
-    box.style.color = isError ? "#842029" : "#0f5132";
-    box.style.border = isError ? "1px solid #f5c2c7" : "1px solid #badbcc";
-    box.innerHTML = (isError ? "❌ " : "✅ ") + msg;
-  }
+        try {
+          for (var r = numRows - 1; r >= 0; r--) {
+            var c0 = cleanText(table.getCell(r, 0).getText().asString());
+            if (c0.indexOf("備") !== -1 || c0.indexOf("嘉") !== -1) {
+              foundData.note = table.getCell(r, 1).getText().asString().trim();
+              break;
+            }
+          }
+        } catch (e) {}
 
-  /* 更新常駐非彈跳訊息框 */
-  function updateInlineMsg(text, isSuccess = false) {
-    const box = document.getElementById("inlineMsgBox");
-    const content = document.getElementById("inlineMsgContent");
-    if (!box || !content) return;
-
-    content.innerText = text;
-    if (isSuccess) {
-      box.classList.add("active");
-    } else {
-      box.classList.remove("active");
-    }
-  }
-
-  function updateCountdownUI() {
-    const badge = document.getElementById("countdownBadge");
-    if (!badge || nextTargetSyncTimestamp === 0) return;
-
-    const diff = nextTargetSyncTimestamp - Date.now();
-    if (diff <= 0) {
-      badge.innerText = "00:00 (觸發中)";
-      return;
-    }
-
-    const totalSeconds = Math.floor(diff / 1000);
-    const m = Math.floor(totalSeconds / 60);
-    const s = totalSeconds % 60;
-    badge.innerText = `倒數 ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  }
-
-  function initDatePicker() {
-    const dateInput = document.getElementById("targetDate");
-    dateInput.value = new Date().toISOString().split('T')[0];
-  }
-
-  function shiftDate(offset) {
-    const dateInput = document.getElementById("targetDate");
-    const currentDate = new Date(dateInput.value || new Date());
-    currentDate.setDate(currentDate.getDate() + offset);
-    dateInput.value = currentDate.toISOString().split('T')[0];
-    onDateChange();
-  }
-
-  function toggleChip(el) {
-    el.classList.toggle("active");
-  }
-
-  function toggleDraftChip(el) {
-    el.classList.toggle("active");
-    autoSaveDraft();
-  }
-
-  function getActiveChips(containerId) {
-    const container = document.getElementById(containerId);
-    if (!container) return [];
-    return Array.from(container.querySelectorAll(".chip.active")).map(node => node.getAttribute("data-sub"));
-  }
-
-  function setActiveChips(containerId, subjectList) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-    container.querySelectorAll(".chip").forEach(chip => {
-      const sub = chip.getAttribute("data-sub");
-      if (subjectList && subjectList.includes(sub)) {
-        chip.classList.add("active");
-      } else {
-        chip.classList.remove("active");
+        return {
+          status: "success",
+          data: foundData,
+          message: "已精準讀取 [" + target8DigitDate + "] 整日資料。"
+        };
       }
-    });
-  }
-
-  function getDraftKey() {
-    return `contact_daily_draft_${document.getElementById("targetDate").value}`;
-  }
-
-  function autoSaveDraft() {
-    const key = getDraftKey();
-    const draftData = {
-      exam: document.getElementById("draftExam").value,
-      homework: document.getElementById("draftHomework").value,
-      note: document.getElementById("draftNote").value,
-      scoreSubjects: getActiveChips("draftScoreChips"),
-      timestamp: new Date().toLocaleTimeString()
-    };
-    localStorage.setItem(key, JSON.stringify(draftData));
-    updateDraftNotice(true, draftData.timestamp);
-  }
-
-  function loadDraftForCurrentDate() {
-    const key = getDraftKey();
-    const saved = localStorage.getItem(key);
-    if (saved) {
-      try {
-        const draftData = JSON.parse(saved);
-        document.getElementById("draftExam").value = draftData.exam || "";
-        document.getElementById("draftHomework").value = draftData.homework || "";
-        document.getElementById("draftNote").value = draftData.note || "";
-        setActiveChips("draftScoreChips", draftData.scoreSubjects || []);
-        updateDraftNotice(true, draftData.timestamp);
-      } catch (e) {
-        updateDraftNotice(false);
-      }
-    } else {
-      document.getElementById("draftExam").value = "";
-      document.getElementById("draftHomework").value = "";
-      document.getElementById("draftNote").value = "";
-      setActiveChips("draftScoreChips", []);
-      updateDraftNotice(false);
     }
   }
 
-  function smartMergeText(existingVal, newVal) {
-    existingVal = (existingVal || "").trim();
-    newVal = (newVal || "").trim();
-    if (!existingVal) return newVal;
-    if (!newVal) return existingVal;
-    if (existingVal === newVal || existingVal.includes(newVal)) return existingVal;
-    return `${existingVal}\n${newVal}`;
+  return { status: "error", message: "找不到日期 [" + target8DigitDate + "] 的投影片備忘錄。" };
+}
+
+function writeContactBookData(params) {
+  params = params || {};
+  if (!params.date) params.date = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd");
+
+  var props = PropertiesService.getScriptProperties();
+  var slideId = props.getProperty('SLIDE_ID');
+  if (!slideId) throw new Error("未設定 SLIDE_ID 指令碼屬性。");
+
+  var presentation = SlidesApp.openById(slideId);
+  var slides = presentation.getSlides();
+  var target8DigitDate = cleanText(params.date).replace(/-/g, '');
+  var isUpdated = false;
+
+  var activeScores = [];
+  if (params.scoreSubjects) {
+    activeScores = String(params.scoreSubjects).split(',').map(function(s) { return cleanText(s); });
   }
 
-  function copyDraftToFormal() {
-    const draftExam = document.getElementById("draftExam").value;
-    const draftHomework = document.getElementById("draftHomework").value;
-    const draftNote = document.getElementById("draftNote").value;
-    const draftScores = getActiveChips("draftScoreChips");
-
-    if (!draftExam && !draftHomework && !draftNote && draftScores.length === 0) {
-      showStatus("草稿區無資料可複製！", true);
-      return;
-    }
-
-    document.getElementById("formalExam").value = smartMergeText(document.getElementById("formalExam").value, draftExam);
-    document.getElementById("formalHomework").value = smartMergeText(document.getElementById("formalHomework").value, draftHomework);
-    document.getElementById("formalNote").value = smartMergeText(document.getElementById("formalNote").value, draftNote);
-
-    const formalScores = new Set([...getActiveChips("formalScoreChips"), ...draftScores]);
-    setActiveChips("formalScoreChips", Array.from(formalScores));
-
-    showStatus("已將草稿內容同步至正式區！", false);
-  }
-
-  function clearDraftForCurrentDate() {
-    // 改用訊息框確認，避免 alert()
-    if (confirm("確定清除本日暫存草稿？")) {
-      localStorage.removeItem(getDraftKey());
-      document.getElementById("draftExam").value = "";
-      document.getElementById("draftHomework").value = "";
-      document.getElementById("draftNote").value = "";
-      setActiveChips("draftScoreChips", []);
-      updateDraftNotice(false);
-      showStatus("已清除本機草稿。", false);
-    }
-  }
-
-  function updateDraftNotice(hasDraft, timeStr = "") {
-    const notice = document.getElementById("draftNotice");
-    if (!notice) return;
-    if (hasDraft) {
-      notice.innerText = `(暫存於 ${timeStr}，自動排程監控中)`;
-      notice.style.color = "#198754";
-    } else {
-      notice.innerText = "(目前無草稿)";
-      notice.style.color = "#6c757d";
-    }
-  }
-
-  function onDateChange() {
-    loadDraftForCurrentDate();
-    document.getElementById("formalExam").value = "";
-    document.getElementById("formalHomework").value = "";
-    document.getElementById("formalNote").value = "";
-    setActiveChips("formalScoreChips", []);
-    showStatus("切換同步日期完成。", false);
-  }
-
-  /* 核心：計算下一個自訂的分鐘整點時間戳 */
-  function calculateNextTargetTime() {
-    const now = new Date();
-    const target = new Date(now);
-
-    target.setSeconds(0, 0);
-
-    if (now.getMinutes() < targetMinute) {
-      // 當前還沒到該分鐘 (例如現在 08:15，設定為 30) -> 目標為 08:30
-      target.setMinutes(targetMinute);
-    } else {
-      // 當前已過該分鐘 (例如現在 08:35，設定為 30) -> 目標為 09:30
-      target.setHours(target.getHours() + 1);
-      target.setMinutes(targetMinute);
-    }
-
-    nextTargetSyncTimestamp = target.getTime();
-
-    const hh = String(target.getHours()).padStart(2, '0');
-    const mm = String(target.getMinutes()).padStart(2, '0');
-    updateInlineMsg(`⏰ 已鎖定每小時 ${targetMinute} 分自動上傳 (下次：${hh}:${mm}:00)`);
-    updateCountdownUI();
-    return nextTargetSyncTimestamp;
-  }
-
-  /* 使用者手動變更分鐘設定 */
-  function onSyncMinuteChanged() {
-    const input = document.getElementById("syncMinuteInput");
-    let val = parseInt(input.value, 10);
-    if (isNaN(val) || val < 0) val = 0;
-    if (val > 59) val = 59;
-    input.value = val;
-    targetMinute = val;
-    localStorage.setItem("contact_sync_minute", targetMinute);
-
-    calculateNextTargetTime();
-    showStatus(`已更新定時同步設定：每小時第 ${targetMinute} 分鐘自動上傳。`, false);
-  }
-
-  /* 核心執行同步函式 (不彈出任何 alert) */
-  async function performUpload(isAuto = false) {
-    if (!navigator.onLine) {
-      updateInlineMsg(`⚠️ 目前處於網路斷線狀態，稍後自動重試...`);
-      return;
-    }
-
-    const rawPwd = document.getElementById("pwd").value.trim();
-    const date = document.getElementById("targetDate").value;
-
-    if (!rawPwd) {
-      if (!isAuto) showStatus("請先輸入授權密碼！", true);
-      return;
-    }
-
-    let exam = document.getElementById("formalExam").value.trim();
-    let homework = document.getElementById("formalHomework").value.trim();
-    let note = document.getElementById("formalNote").value.trim();
-    let activeScores = getActiveChips("formalScoreChips").join(",");
-
-    if (!exam && !homework && !note && !activeScores) {
-      exam = document.getElementById("draftExam").value.trim();
-      homework = document.getElementById("draftHomework").value.trim();
-      note = document.getElementById("draftNote").value.trim();
-      activeScores = getActiveChips("draftScoreChips").join(",");
-    }
-
-    if (!exam && !homework && !note && !activeScores) return;
-
-    const currentDataHash = `${date}|${exam}|${homework}|${note}|${activeScores}`;
-    if (currentDataHash === lastSyncedDataHash && isAuto) return;
-
+  for (var i = 0; i < slides.length; i++) {
+    var slide = slides[i];
+    var notesText = "";
     try {
-      const hashedPwd = await hashPassword(rawPwd);
-      await sendJsonpRequest("write", {
-        password: rawPwd,
-        hashedPassword: hashedPwd,
-        date: date,
-        exam: exam,
-        homework: homework,
-        note: note,
-        scoreSubjects: activeScores
-      });
+      notesText = cleanText(slide.getNotesPage().getSpeakerNotesShape().getText().asString());
+    } catch (e) {}
 
-      lastSyncedDataHash = currentDataHash;
-      const nowStr = new Date().toLocaleTimeString();
-      showStatus(`[排程同步完成] 內容已上傳雲端 (${nowStr})！`, false);
-      updateInlineMsg(`✅ 已於 ${nowStr} 成功自動同步簡報！`, true);
-    } catch (err) {
-      console.warn("同步失敗或處於斷網區間：", err.message);
-      updateInlineMsg(`⚠️ 排程同步暫緩 (${err.message})`);
-    }
-  }
+    if (notesText.indexOf(target8DigitDate) !== -1) {
+      var tables = slide.getTables();
+      for (var t = 0; t < tables.length; t++) {
+        var table = tables[t];
+        var numRows = table.getNumRows();
 
-  async function checkAndTriggerSync() {
-    updateCountdownUI();
-    const now = Date.now();
-    if (now >= nextTargetSyncTimestamp) {
-      console.log(`[到達 ${targetMinute} 分排程] 觸發同步...`);
-      await performUpload(true);
-      calculateNextTargetTime();
-    }
-  }
+        var contentStartRow = 1;
+        for (var r = 0; r < numRows; r++) {
+          try {
+            var c0 = cleanText(table.getCell(r, 0).getText().asString());
+            if (c0.indexOf("國文") !== -1) {
+              contentStartRow = r;
+              break;
+            }
+          } catch (e) {}
+        }
 
-  async function handleWrite() {
-    await performUpload(false);
-  }
+        try {
+          if (params.exam !== undefined) {
+            table.getCell(contentStartRow, 1).getText().setText(params.exam);
+          }
+        } catch (e) {}
+        try {
+          if (params.homework !== undefined) {
+            table.getCell(contentStartRow, 2).getText().setText(params.homework);
+          }
+        } catch (e) {}
+        isUpdated = true;
 
-  async function handleRead() {
-    const rawPwd = document.getElementById("pwd").value.trim();
-    const date = document.getElementById("targetDate").value;
+        var allSubjects = ["國文", "英語", "數學", "自然", "歷史", "地理", "公民"];
+        for (var r = 0; r < numRows; r++) {
+          try {
+            var subName = cleanText(table.getCell(r, 0).getText().asString());
+            for (var s = 0; s < allSubjects.length; s++) {
+              if (subName.indexOf(allSubjects[s]) !== -1) {
+                if (table.getNumColumns() > 3) {
+                  var shouldHaveScore = activeScores.indexOf(allSubjects[s]) !== -1;
+                  table.getCell(r, 3).getText().setText(shouldHaveScore ? "有" : "");
+                }
+                break;
+              }
+            }
+          } catch (e) {}
+        }
 
-    if (!rawPwd) {
-      showStatus("請輸入授權密碼以進行讀取！", true);
-      return;
-    }
+        try {
+          for (var r = numRows - 1; r >= 0; r--) {
+            var c0 = cleanText(table.getCell(r, 0).getText().asString());
+            if (c0.indexOf("備") !== -1 || c0.indexOf("嘉") !== -1) {
+              if (params.note !== undefined) {
+                table.getCell(r, 1).getText().setText(params.note);
+              }
+              break;
+            }
+          }
+        } catch (e) {}
 
-    showStatus("正在連線讀取雲端簡報內容...", false);
-
-    try {
-      const hashedPwd = await hashPassword(rawPwd);
-      const res = await sendJsonpRequest("read", {
-        password: rawPwd,
-        hashedPassword: hashedPwd,
-        date: date
-      });
-
-      if (res && res.data) {
-        document.getElementById("formalExam").value = smartMergeText(document.getElementById("formalExam").value, res.data.exam || "");
-        document.getElementById("formalHomework").value = smartMergeText(document.getElementById("formalHomework").value, res.data.homework || "");
-        document.getElementById("formalNote").value = smartMergeText(document.getElementById("formalNote").value, res.data.note || "");
-        setActiveChips("formalScoreChips", res.data.scoreSubjects || []);
-        showStatus("已成功同步雲端內容！", false);
-      } else {
-        showStatus("該日期雲端尚無紀錄。", false);
+        break;
       }
-    } catch (err) {
-      showStatus(err.message, true);
+      break;
     }
   }
 
-  /* 背景 Web Worker：每 1 秒更新倒數與檢查時間，縮小視窗依然準時執行 */
-  function startBackgroundWorker() {
-    const workerScript = `
-      setInterval(() => {
-        postMessage('TICK_1_SEC');
-      }, 1000);
-    `;
-    const blob = new Blob([workerScript], { type: "application/javascript" });
-    bgWorker = new Worker(URL.createObjectURL(blob));
+  presentation.saveAndClose();
 
-    bgWorker.onmessage = function(e) {
-      if (e.data === 'TICK_1_SEC') {
-        checkAndTriggerSync();
-      }
-    };
+  if (!isUpdated) {
+    return { status: "error", message: "找不到日期 [" + target8DigitDate + "] 的投影片備忘錄，無法寫入！" };
   }
 
-  window.addEventListener("DOMContentLoaded", () => {
-    initDatePicker();
-    loadDraftForCurrentDate();
+  return {
+    status: "success",
+    message: "已成功寫入簡報整日內容！",
+    timestamp: new Date().toISOString()
+  };
+}
 
-    // 載入自訂分鐘數偏好 (預設 30)
-    const savedMinute = localStorage.getItem("contact_sync_minute");
-    if (savedMinute !== null) {
-      targetMinute = parseInt(savedMinute, 10);
-      document.getElementById("syncMinuteInput").value = targetMinute;
-    }
-
-    calculateNextTargetTime();
-
-    try {
-      startBackgroundWorker();
-    } catch (e) {
-      setInterval(checkAndTriggerSync, 1000);
-    }
-
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        checkAndTriggerSync();
-      }
-    });
-
-    window.addEventListener('online', () => {
-      showStatus("網路連線恢復，檢查同步狀態...", false);
-      checkAndTriggerSync();
-    });
-  });
-</script>
-
-</body>
-</html>
+function buildJsonpResponse(callback, data) {
+  var output = callback + "(" + JSON.stringify(data) + ");";
+  return ContentService.createTextOutput(output)
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
