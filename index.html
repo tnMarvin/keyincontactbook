@@ -1,6 +1,6 @@
 <!--
-  功能說明：電子聯絡簿系統 - 啟動連線探針 + 安全先讀後寫工作流 + 離線提示與草稿保護 + 自訂排程
-  代碼產生日期與時間：2026-10-06 20:20
+  功能說明：電子聯絡簿系統 - 投影片演講者備忘錄 (Speaker Notes) 讀寫暫存 + 探針連線 + 先讀後寫工作流
+  代碼產生日期與時間：2026-10-06 21:18
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -34,6 +34,8 @@
       --btn-warning: #ffc107;
       --btn-danger: #dc3545;
       --btn-secondary: #6c757d;
+      --speaker-bg: #eef2ff;
+      --speaker-border: #4f46e5;
       --bg-color: #f8f9fa;
       --card-bg: #ffffff;
       --text-color: #212529;
@@ -109,7 +111,6 @@
       cursor: pointer;
     }
 
-    /* 頂部排程與狀態指示條 */
     .schedule-bar {
       display: flex;
       align-items: center;
@@ -130,7 +131,6 @@
       text-align: center;
     }
 
-    /* 內嵌訊息框 */
     .inline-msg-box {
       padding: 12px 14px;
       border-radius: 8px;
@@ -186,6 +186,18 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 12px;
+    }
+
+    /* 演講者備忘錄卡片外觀 */
+    .speaker-card {
+      background-color: var(--speaker-bg);
+      border: 1.5px solid var(--speaker-border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 18px;
+    }
+    .speaker-card label {
+      color: #3730a3;
     }
 
     .btn {
@@ -268,7 +280,6 @@
       margin-top: 12px;
     }
 
-    /* 安全驗證模態視窗 (Modal) */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -323,20 +334,18 @@
     </div>
   </div>
 
-  <!-- 自訂排程列 -->
   <div class="schedule-bar">
     <span>⏱️ 自動背景同步：每小時第</span>
     <input type="number" id="syncMinuteInput" min="0" max="59" value="30" onchange="onSyncMinuteChanged()">
     <span>分整自動上傳</span>
   </div>
 
-  <!-- 內嵌訊息框 -->
   <div id="inlineMsgBox" class="inline-msg-box">
     <span id="inlineMsgContent">🔍 正在偵測校園網路連線狀態...</span>
     <span id="countdownBadge" style="font-weight: 700; font-family: monospace;">--:--</span>
   </div>
 
-  <!-- 上方：成績科目標籤 -->
+  <!-- 1. 成績科目標籤 -->
   <div class="form-group">
     <label>📊 今日有成績科目：</label>
     <div class="chip-container" id="formalScoreChips">
@@ -350,34 +359,39 @@
     </div>
   </div>
 
-  <!-- 中段：正式區 (預設鎖定，需讀取完成才解鎖) -->
+  <!-- 2. 正式考試與作業 -->
   <div class="grid-2col form-group">
     <div>
       <label for="formalExam">📌 正式考試內容：</label>
-      <textarea id="formalExam" rows="7" placeholder="連線驗證後將自動帶入雲端現有內容..."></textarea>
+      <textarea id="formalExam" rows="7" placeholder="連線驗證後自動帶入..."></textarea>
     </div>
     <div>
       <label for="formalHomework">✍️ 正式作業內容：</label>
-      <textarea id="formalHomework" rows="7" placeholder="連線驗證後將自動帶入雲端現有內容..."></textarea>
+      <textarea id="formalHomework" rows="7" placeholder="連線驗證後自動帶入..."></textarea>
     </div>
   </div>
 
-  <!-- 下方：全寬 備/嘉 欄位 -->
+  <!-- 3. 公開備註 / 嘉言錄 (投影片表格底端) -->
   <div class="form-group">
-    <label for="formalNote">📝 備註 / 嘉言錄（底端橫跨）：</label>
-    <textarea id="formalNote" rows="2" placeholder="連線驗證後將自動帶入雲端現有內容..."></textarea>
+    <label for="formalNote">📢 公開備註 / 嘉言錄（投影片底端整欄）：</label>
+    <textarea id="formalNote" rows="2" placeholder="連線驗證後自動帶入..."></textarea>
+  </div>
+
+  <!-- 4. 投影片演講者備忘錄 (Speaker Notes) -->
+  <div class="speaker-card">
+    <label for="formalSpeakerNotes">🎙️ 投影片演講者備忘錄（Speaker Notes，放投影講稿與私人提醒）：</label>
+    <textarea id="formalSpeakerNotes" rows="3" placeholder="例如：課堂重點講稿、待收回條、家長聯絡記錄... (系統已自動保護日期標記)"></textarea>
   </div>
 
   <button class="btn btn-preview" onclick="manualTriggerRead()">☁️ 讀取雲端投影片內容</button> 
   
-  <!-- 核心安全防護：未成功讀取前禁用寫入按鈕 -->
   <button id="btnWrite" class="btn btn-submit" onclick="handleWrite()" disabled title="請先驗證並讀取雲端內容以避免盲寫覆蓋">
     💾 修改並寫入雲端簡報 (未讀取鎖定中)
   </button>
 
   <div id="statusBox" class="status-box">初始化中...</div>
 
-  <!-- 離線草稿區塊 (鏡像配置) -->
+  <!-- 5. 離線草稿區塊 (包含演講者備忘錄草稿) -->
   <div class="draft-section">
     <div class="draft-header">
       <div class="draft-title">💾 本機離線草稿暫存區</div>
@@ -400,17 +414,22 @@
     <div class="grid-2col form-group" style="margin-bottom:12px;">
       <div>
         <label for="draftExam">📌 暫存考試：</label>
-        <textarea id="draftExam" rows="4" placeholder="離線時在此輸入考試草稿..." oninput="autoSaveDraft()"></textarea>
+        <textarea id="draftExam" rows="4" placeholder="離線時輸入考試草稿..." oninput="autoSaveDraft()"></textarea>
       </div>
       <div>
-        <label for="draftHomework">✍️ 暫存作業：</label>
-        <textarea id="draftHomework" rows="4" placeholder="離線時在此輸入作業草稿..." oninput="autoSaveDraft()"></textarea>
+        <label for="draftHomework">✍ 暫存作業：</label>
+        <textarea id="draftHomework" rows="4" placeholder="離線時輸入作業草稿..." oninput="autoSaveDraft()"></textarea>
       </div>
     </div>
 
     <div class="form-group" style="margin-bottom:12px;">
-      <label for="draftNote">📝 暫存備註 / 嘉言錄：</label>
-      <textarea id="draftNote" rows="2" placeholder="離線時在此輸入備註草稿..." oninput="autoSaveDraft()"></textarea>
+      <label for="draftNote">📢 暫存公開備註：</label>
+      <textarea id="draftNote" rows="2" placeholder="離線時輸入公開備註草稿..." oninput="autoSaveDraft()"></textarea>
+    </div>
+
+    <div class="form-group" style="margin-bottom:12px;">
+      <label for="draftSpeakerNotes">🎙️ 暫存演講者備忘錄：</label>
+      <textarea id="draftSpeakerNotes" rows="2" placeholder="離線時輸入演講者備忘稿草稿..." oninput="autoSaveDraft()" style="background-color:#eef2ff;"></textarea>
     </div>
 
     <div class="action-row">
@@ -421,7 +440,6 @@
   </div>
 </div>
 
-<!-- 安全認證對話框 (Modal) -->
 <div id="authModal" class="modal-overlay">
   <div class="modal-card">
     <div class="modal-title">🔐 網路連線正常，請驗證身分</div>
@@ -439,7 +457,7 @@
   let targetMinute = 30;
   let nextTargetSyncTimestamp = 0;
   let lastSyncedDataHash = "";
-  let hasReadCurrentDate = false; // 是否已完成讀取雲端內容之標記
+  let hasReadCurrentDate = false;
   let isOnlineState = false;
   let bgWorker = null;
   let dateChangeDebounceTimer = null;
@@ -549,7 +567,6 @@
     }
   }
 
-  /* 核心：連線探針 (Ping) */
   async function checkNetworkProbe() {
     updateInlineMsg("🔍 正在嘗試連線雲端服務...", "normal");
     try {
@@ -559,11 +576,9 @@
       
       const pwd = document.getElementById("pwd").value.trim();
       if (!pwd) {
-        // 連線成功且尚未有密碼，彈出 Modal 提示
         document.getElementById("authModal").style.display = "flex";
         document.getElementById("modalPwdInput").focus();
       } else {
-        // 已有密碼，自動讀取
         executeRead(false);
       }
     } catch (e) {
@@ -583,7 +598,7 @@
     executeRead(false);
   }
 
-  /* 核心：執行讀取作業 */
+  /* 讀取演講者備忘錄與簡報表格 */
   async function executeRead(isSilent = false) {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
@@ -607,11 +622,12 @@
         document.getElementById("formalExam").value = res.data.exam || "";
         document.getElementById("formalHomework").value = res.data.homework || "";
         document.getElementById("formalNote").value = res.data.note || "";
+        document.getElementById("formalSpeakerNotes").value = res.data.speakerNotes || ""; // 讀取純使用者演講備忘錄
         setActiveChips("formalScoreChips", res.data.scoreSubjects || []);
 
         hasReadCurrentDate = true;
-        setWriteButtonState(true); // 解鎖寫入按鈕
-        showStatus(`已精準載入 [${date}] 雲端簡報內容！`, false);
+        setWriteButtonState(true);
+        showStatus(`已精準載入 [${date}] 雲端簡報內容 (含演講者備忘錄)！`, false);
         updateInlineMsg(`✅ 已同步最新雲端內容 (解鎖寫入權限)`, "active");
       }
     } catch (err) {
@@ -625,7 +641,6 @@
     executeRead(false);
   }
 
-  /* 核心：執行寫入作業 */
   async function handleWrite() {
     if (!hasReadCurrentDate) {
       showStatus("為避免覆蓋未確認內容，請先點擊讀取雲端投影片！", true);
@@ -651,18 +666,20 @@
     let exam = document.getElementById("formalExam").value.trim();
     let homework = document.getElementById("formalHomework").value.trim();
     let note = document.getElementById("formalNote").value.trim();
+    let speakerNotes = document.getElementById("formalSpeakerNotes").value.trim();
     let activeScores = getActiveChips("formalScoreChips").join(",");
 
-    if (!exam && !homework && !note && !activeScores) {
+    if (!exam && !homework && !note && !speakerNotes && !activeScores) {
       exam = document.getElementById("draftExam").value.trim();
       homework = document.getElementById("draftHomework").value.trim();
       note = document.getElementById("draftNote").value.trim();
+      speakerNotes = document.getElementById("draftSpeakerNotes").value.trim();
       activeScores = getActiveChips("draftScoreChips").join(",");
     }
 
-    if (!exam && !homework && !note && !activeScores) return;
+    if (!exam && !homework && !note && !speakerNotes && !activeScores) return;
 
-    const currentDataHash = `${date}|${exam}|${homework}|${note}|${activeScores}`;
+    const currentDataHash = `${date}|${exam}|${homework}|${note}|${speakerNotes}|${activeScores}`;
     if (currentDataHash === lastSyncedDataHash && isAuto) return;
 
     try {
@@ -674,12 +691,13 @@
         exam: exam,
         homework: homework,
         note: note,
+        speakerNotes: speakerNotes,
         scoreSubjects: activeScores
       });
 
       lastSyncedDataHash = currentDataHash;
       const nowStr = new Date().toLocaleTimeString();
-      showStatus(`[同步完成] 內容已上傳雲端 (${nowStr})！`, false);
+      showStatus(`[同步完成] 內容已上傳雲端 (含演講者備忘錄) (${nowStr})！`, false);
       updateInlineMsg(`✅ 已於 ${nowStr} 成功自動同步簡報！`, "active");
     } catch (err) {
       console.warn("同步失敗或處於斷網區間：", err.message);
@@ -703,12 +721,12 @@
   function onDateChange() {
     loadDraftForCurrentDate();
     hasReadCurrentDate = false;
-    setWriteButtonState(false); // 切換日期後重新鎖定寫入，防盲寫
+    setWriteButtonState(false);
 
-    // 清空正式區，避免殘留前一天的文字
     document.getElementById("formalExam").value = "";
     document.getElementById("formalHomework").value = "";
     document.getElementById("formalNote").value = "";
+    document.getElementById("formalSpeakerNotes").value = "";
     setActiveChips("formalScoreChips", []);
 
     clearTimeout(dateChangeDebounceTimer);
@@ -760,6 +778,7 @@
       exam: document.getElementById("draftExam").value,
       homework: document.getElementById("draftHomework").value,
       note: document.getElementById("draftNote").value,
+      speakerNotes: document.getElementById("draftSpeakerNotes").value,
       scoreSubjects: getActiveChips("draftScoreChips"),
       timestamp: new Date().toLocaleTimeString()
     };
@@ -776,6 +795,7 @@
         document.getElementById("draftExam").value = draftData.exam || "";
         document.getElementById("draftHomework").value = draftData.homework || "";
         document.getElementById("draftNote").value = draftData.note || "";
+        document.getElementById("draftSpeakerNotes").value = draftData.speakerNotes || "";
         setActiveChips("draftScoreChips", draftData.scoreSubjects || []);
         updateDraftNotice(true, draftData.timestamp);
       } catch (e) {
@@ -785,6 +805,7 @@
       document.getElementById("draftExam").value = "";
       document.getElementById("draftHomework").value = "";
       document.getElementById("draftNote").value = "";
+      document.getElementById("draftSpeakerNotes").value = "";
       setActiveChips("draftScoreChips", []);
       updateDraftNotice(false);
     }
@@ -803,9 +824,10 @@
     const draftExam = document.getElementById("draftExam").value;
     const draftHomework = document.getElementById("draftHomework").value;
     const draftNote = document.getElementById("draftNote").value;
+    const draftSpeakerNotes = document.getElementById("draftSpeakerNotes").value;
     const draftScores = getActiveChips("draftScoreChips");
 
-    if (!draftExam && !draftHomework && !draftNote && draftScores.length === 0) {
+    if (!draftExam && !draftHomework && !draftNote && !draftSpeakerNotes && draftScores.length === 0) {
       showStatus("草稿區無資料可複製！", true);
       return;
     }
@@ -813,6 +835,7 @@
     document.getElementById("formalExam").value = smartMergeText(document.getElementById("formalExam").value, draftExam);
     document.getElementById("formalHomework").value = smartMergeText(document.getElementById("formalHomework").value, draftHomework);
     document.getElementById("formalNote").value = smartMergeText(document.getElementById("formalNote").value, draftNote);
+    document.getElementById("formalSpeakerNotes").value = smartMergeText(document.getElementById("formalSpeakerNotes").value, draftSpeakerNotes);
 
     const formalScores = new Set([...getActiveChips("formalScoreChips"), ...draftScores]);
     setActiveChips("formalScoreChips", Array.from(formalScores));
@@ -826,6 +849,7 @@
       document.getElementById("draftExam").value = "";
       document.getElementById("draftHomework").value = "";
       document.getElementById("draftNote").value = "";
+      document.getElementById("draftSpeakerNotes").value = "";
       setActiveChips("draftScoreChips", []);
       updateDraftNotice(false);
       showStatus("已清除本機草稿。", false);
@@ -852,7 +876,7 @@
     if (now.getMinutes() < targetMinute) {
       target.setMinutes(targetMinute);
     } else {
-      target.setHours(targetTarget => target.getHours() + 1);
+      target.setHours(target.getHours() + 1);
       target.setMinutes(targetMinute);
     }
 
@@ -915,7 +939,6 @@
       setInterval(checkAndTriggerSync, 1000);
     }
 
-    // 啟動即執行：連線探針檢驗
     checkNetworkProbe();
 
     document.addEventListener('visibilitychange', () => {
