@@ -1,6 +1,6 @@
 /**
- * 功能描述：電子聯絡簿離線 Service Worker (納入 JSZip 支援本機 PPT 雙向讀寫)
- * 代碼產生日期與時間：2026-10-23 16:45
+ * 功能描述：電子聯絡簿離線 Service Worker (PWA 快取機制 + 支援 JSZip 與 PptxGenJS)
+ * 代碼產生日期與時間：2026-10-23 17:15
  */
 
 const CACHE_NAME = 'contact-book-v4';
@@ -14,9 +14,10 @@ const ASSETS_TO_CACHE = [
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS_TO_CACHE))
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(ASSETS_TO_CACHE);
+    }).then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {
