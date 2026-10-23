@@ -1,6 +1,6 @@
 <!--
-  功能說明：電子聯絡簿系統 - 投影片演講者備忘錄 (Speaker Notes) 讀寫暫存 + 探針連線 + 先讀後寫工作流
-  代碼產生日期與時間：2026-10-06 21:18
+  功能說明：電子聯絡簿系統 - 雙軌完整旗艦版 (支援 IndexedDB 記憶檔案 + 斷網覆寫本地 PPT 投影 + 演講者備忘錄安全讀寫 + PWA)
+  代碼產生日期與時間：2026-10-23 14:35
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -8,11 +8,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>電子聯絡簿寫入系統</title>
+  
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#198754">
+
+  <!-- 本機離線 PPTX 生成引擎 -->
+  <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+
   <script>
     if (window.top !== window.self) {
-      try {
-        window.top.location.href = window.location.href;
-      } catch (e) {
+      try { window.top.location.href = window.location.href; } catch (e) {
         console.warn("無法跳脫 iframe，維持當前視窗模式");
       }
     }
@@ -111,6 +116,24 @@
       cursor: pointer;
     }
 
+    /* 本機 PPT 檔案記憶列 */
+    .local-file-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: #fff3cd;
+      border: 1px solid #ffe69c;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+      font-size: 0.9rem;
+    }
+    .local-file-bar.ready {
+      background-color: #d1e7dd;
+      border-color: #badbcc;
+      color: #0f5132;
+    }
+
     .schedule-bar {
       display: flex;
       align-items: center;
@@ -188,7 +211,6 @@
       gap: 12px;
     }
 
-    /* 演講者備忘錄卡片外觀 */
     .speaker-card {
       background-color: var(--speaker-bg);
       border: 1.5px solid var(--speaker-border);
@@ -309,7 +331,7 @@
 
     @media (max-width: 520px) {
       .grid-2col { grid-template-columns: 1fr; }
-      .schedule-bar { flex-direction: column; align-items: flex-start; }
+      .schedule-bar, .local-file-bar { flex-direction: column; align-items: flex-start; }
       .action-row { flex-direction: column; }
       .action-row .btn-sm { width: 100%; }
     }
@@ -332,6 +354,12 @@
       <input type="date" id="targetDate" onchange="onDateChange()">
       <button class="btn btn-sm btn-secondary" onclick="shiftDate(1)">後一天 ▶</button>
     </div>
+  </div>
+
+  <!-- 本機 PPT 檔案記憶列 -->
+  <div id="localFileBar" class="local-file-bar">
+    <span id="localFileStatus">⚠️ 尚未連結本機投影 PPT 檔案</span>
+    <button id="btnSelectFile" class="btn btn-sm btn-warning" onclick="selectOrVerifyLocalPpt()">📂 指定本機 PPT 檔案</button>
   </div>
 
   <div class="schedule-bar">
@@ -371,13 +399,13 @@
     </div>
   </div>
 
-  <!-- 3. 公開備註 / 嘉言錄 (投影片表格底端) -->
+  <!-- 3. 公開備註 / 嘉言錄 -->
   <div class="form-group">
     <label for="formalNote">📢 公開備註 / 嘉言錄（投影片底端整欄）：</label>
     <textarea id="formalNote" rows="2" placeholder="連線驗證後自動帶入..."></textarea>
   </div>
 
-  <!-- 4. 投影片演講者備忘錄 (Speaker Notes) -->
+  <!-- 4. 投影片演講者備忘錄 -->
   <div class="speaker-card">
     <label for="formalSpeakerNotes">🎙️ 投影片演講者備忘錄（Speaker Notes，放投影講稿與私人提醒）：</label>
     <textarea id="formalSpeakerNotes" rows="3" placeholder="例如：課堂重點講稿、待收回條、家長聯絡記錄... (系統已自動保護日期標記)"></textarea>
@@ -385,13 +413,13 @@
 
   <button class="btn btn-preview" onclick="manualTriggerRead()">☁️ 讀取雲端投影片內容</button> 
   
-  <button id="btnWrite" class="btn btn-submit" onclick="handleWrite()" disabled title="請先驗證並讀取雲端內容以避免盲寫覆蓋">
-    💾 修改並寫入雲端簡報 (未讀取鎖定中)
+  <button id="btnWrite" class="btn btn-submit" onclick="handleWrite()">
+    💾 修改並寫入 (本機 PPT 覆寫 + 雲端同步)
   </button>
 
   <div id="statusBox" class="status-box">初始化中...</div>
 
-  <!-- 5. 離線草稿區塊 (包含演講者備忘錄草稿) -->
+  <!-- 5. 離線草稿區塊 -->
   <div class="draft-section">
     <div class="draft-header">
       <div class="draft-title">💾 本機離線草稿暫存區</div>
@@ -461,11 +489,143 @@
   let isOnlineState = false;
   let bgWorker = null;
   let dateChangeDebounceTimer = null;
+  let localFileHandle = null;
 
   window.onerror = function(msg, url, line) {
     showStatus(`執行異常 (行號 ${line}): ${msg}`, true);
     return false;
   };
+
+  /* IndexedDB 存取控制代碼 */
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open("PptxHandleDB", 1);
+      req.onupgradeneeded = (e) => e.target.result.createObjectStore("handles");
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function saveHandleToDB(handle) {
+    const db = await openDB();
+    const tx = db.transaction("handles", "readwrite");
+    tx.objectStore("handles").put(handle, "activePptxHandle");
+  }
+
+  async function getHandleFromDB() {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction("handles", "readonly");
+      const req = tx.objectStore("handles").get("activePptxHandle");
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  /* 啟動時自動還原檔案設定 */
+  async function autoRestoreLocalFile() {
+    try {
+      const handle = await getHandleFromDB();
+      if (!handle) return;
+
+      const opts = { mode: 'readwrite' };
+      if ((await handle.queryPermission(opts)) === 'granted') {
+        localFileHandle = handle;
+        setFileUIReady(handle.name);
+      } else {
+        localFileHandle = handle;
+        document.getElementById("localFileStatus").innerText = `📂 已記憶 [${handle.name}] (待授權)`;
+        document.getElementById("btnSelectFile").innerText = "⚡ 點此一鍵授權";
+      }
+    } catch (e) {
+      console.warn("無法自動還原控制代碼：", e);
+    }
+  }
+
+  function setFileUIReady(name) {
+    document.getElementById("localFileBar").classList.add("ready");
+    document.getElementById("localFileStatus").innerText = `✅ 已連結投影檔: ${name}`;
+    document.getElementById("btnSelectFile").innerText = "🔄 更換檔案";
+  }
+
+  async function selectOrVerifyLocalPpt() {
+    if (!('showOpenFilePicker' in window)) {
+      alert("目前瀏覽器不支援本機檔案直接寫入，請使用 Chrome 或 Edge！");
+      return;
+    }
+    try {
+      if (localFileHandle && (await localFileHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+        const perm = await localFileHandle.requestPermission({ mode: 'readwrite' });
+        if (perm === 'granted') {
+          setFileUIReady(localFileHandle.name);
+          showStatus(`已恢復對 [${localFileHandle.name}] 的寫入授權！`, false);
+          return;
+        }
+      }
+
+      const [handle] = await window.showOpenFilePicker({
+        types: [{
+          description: 'PowerPoint 簡報檔',
+          accept: { 'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'] }
+        }],
+        multiple: false
+      });
+
+      localFileHandle = handle;
+      await saveHandleToDB(handle);
+      setFileUIReady(handle.name);
+      showStatus(`成功連結並記憶本機投影檔案: ${handle.name}！`, false);
+    } catch (err) {
+      if (err.name !== 'AbortError') showStatus(`設定檔案失敗: ${err.message}`, true);
+    }
+  }
+
+  /* 使用 PptxGenJS 生成投影片並直接覆寫本地檔案 */
+  async function writeToLocalPptxFile(data) {
+    if (!localFileHandle) return false;
+    try {
+      if ((await localFileHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+        const perm = await localFileHandle.requestPermission({ mode: 'readwrite' });
+        if (perm !== 'granted') return false;
+      }
+
+      const pptx = new PptxGenJS();
+      pptx.layout = 'LAYOUT_16x9';
+      const slide = pptx.addSlide();
+      
+      slide.addText(`📅 聯絡簿 - ${data.date}`, { x: 0.5, y: 0.4, w: 9.0, h: 0.5, fontSize: 20, bold: true, color: '198754' });
+
+      const scoreText = data.scoreSubjects.length > 0 ? data.scoreSubjects.join('、') : "無";
+      slide.addText(`📊 今日有成績科目：${scoreText}`, { x: 0.5, y: 1.0, w: 9.0, h: 0.4, fontSize: 14, bold: true, color: '0f5132' });
+
+      const tableData = [
+        [
+          { text: "📌 考試內容", options: { bold: true, fill: 'e9ecef', align: 'center' } },
+          { text: "✍️ 作業內容", options: { bold: true, fill: 'e9ecef', align: 'center' } }
+        ],
+        [
+          { text: data.exam || "(本日無排定考試)", options: { valign: 'top' } },
+          { text: data.homework || "(本日無作業)", options: { valign: 'top' } }
+        ]
+      ];
+      slide.addTable(tableData, { x: 0.5, y: 1.5, w: 9.0, h: 3.5, colW: [4.5, 4.5], border: { pt: 1, color: 'ced4da' } });
+      slide.addText(`📢 備註：${data.note || "無"}`, { x: 0.5, y: 5.2, w: 9.0, h: 0.8, fontSize: 13, color: '495057', fill: 'f8f9fa' });
+
+      if (data.speakerNotes) {
+        slide.addNotes(data.speakerNotes);
+      }
+
+      const blob = await pptx.write("blob");
+      const writable = await localFileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (err) {
+      console.error("本機寫入失敗：", err);
+      showStatus(`本機 PPT 寫入失敗 (請確認檔案未在 PowerPoint 中被鎖定): ${err.message}`, true);
+      return false;
+    }
+  }
 
   async function hashPassword(plainText) {
     if (!plainText) return "";
@@ -510,7 +670,7 @@
 
       script.onerror = () => {
         cleanup();
-        reject(new Error("網路請求失敗，請確認連線。"));
+        reject(new Error("網路請求失敗，已切換至本機模式。"));
       };
 
       script.src = `${GAS_WEB_APP_URL}?${queryParams.toString()}`;
@@ -554,19 +714,6 @@
     badge.innerText = `倒數 ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }
 
-  function setWriteButtonState(enabled) {
-    const btn = document.getElementById("btnWrite");
-    if (!btn) return;
-    btn.disabled = !enabled;
-    if (enabled) {
-      btn.innerText = "💾 修改並寫入雲端簡報";
-      btn.title = "已完成雲端讀取核對，可安全寫入";
-    } else {
-      btn.innerText = "💾 修改並寫入雲端簡報 (未讀取鎖定中)";
-      btn.title = "請先驗證並讀取雲端內容以避免盲寫覆蓋";
-    }
-  }
-
   async function checkNetworkProbe() {
     updateInlineMsg("🔍 正在嘗試連線雲端服務...", "normal");
     try {
@@ -583,9 +730,8 @@
       }
     } catch (e) {
       isOnlineState = false;
-      setWriteButtonState(false);
-      updateInlineMsg("⚠️ 目前為離線狀態 (無法讀取雲端)。請在下方【草稿暫存區】輸入內容。", "offline");
-      showStatus("網路離線中，已保護既有畫面，請直接使用暫存區作業。", false);
+      updateInlineMsg("⚠️ 目前為離線狀態！點擊寫入可直接覆寫本機 PPT 檔案以供大螢幕投影。", "offline");
+      showStatus("網路離線中：點擊修改並寫入將直接覆寫本機 PPT 檔案！", false);
     }
   }
 
@@ -622,17 +768,15 @@
         document.getElementById("formalExam").value = res.data.exam || "";
         document.getElementById("formalHomework").value = res.data.homework || "";
         document.getElementById("formalNote").value = res.data.note || "";
-        document.getElementById("formalSpeakerNotes").value = res.data.speakerNotes || ""; // 讀取純使用者演講備忘錄
+        document.getElementById("formalSpeakerNotes").value = res.data.speakerNotes || "";
         setActiveChips("formalScoreChips", res.data.scoreSubjects || []);
 
         hasReadCurrentDate = true;
-        setWriteButtonState(true);
         showStatus(`已精準載入 [${date}] 雲端簡報內容 (含演講者備忘錄)！`, false);
-        updateInlineMsg(`✅ 已同步最新雲端內容 (解鎖寫入權限)`, "active");
+        updateInlineMsg(`✅ 已同步最新雲端內容`, "active");
       }
     } catch (err) {
       hasReadCurrentDate = false;
-      setWriteButtonState(false);
       showStatus(`讀取失敗: ${err.message}`, true);
     }
   }
@@ -642,45 +786,61 @@
   }
 
   async function handleWrite() {
-    if (!hasReadCurrentDate) {
-      showStatus("為避免覆蓋未確認內容，請先點擊讀取雲端投影片！", true);
-      return;
-    }
-    await performUpload(false);
+    await performUnifiedUpload(false);
   }
 
-  async function performUpload(isAuto = false) {
-    if (!navigator.onLine) {
-      updateInlineMsg(`⚠️ 目前處於網路斷線狀態，稍後自動重試...`, "offline");
-      return;
-    }
-
+  /* 雙軌同步核心流程 */
+  async function performUnifiedUpload(isAuto = false) {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
-
-    if (!rawPwd) {
-      if (!isAuto) showStatus("請先輸入授權密碼！", true);
-      return;
-    }
 
     let exam = document.getElementById("formalExam").value.trim();
     let homework = document.getElementById("formalHomework").value.trim();
     let note = document.getElementById("formalNote").value.trim();
     let speakerNotes = document.getElementById("formalSpeakerNotes").value.trim();
-    let activeScores = getActiveChips("formalScoreChips").join(",");
+    let activeScores = getActiveChips("formalScoreChips");
 
-    if (!exam && !homework && !note && !speakerNotes && !activeScores) {
+    if (!exam && !homework && !note && !speakerNotes && activeScores.length === 0) {
       exam = document.getElementById("draftExam").value.trim();
       homework = document.getElementById("draftHomework").value.trim();
       note = document.getElementById("draftNote").value.trim();
       speakerNotes = document.getElementById("draftSpeakerNotes").value.trim();
-      activeScores = getActiveChips("draftScoreChips").join(",");
+      activeScores = getActiveChips("draftScoreChips");
     }
 
-    if (!exam && !homework && !note && !speakerNotes && !activeScores) return;
+    if (!exam && !homework && !note && !speakerNotes && activeScores.length === 0) return;
 
-    const currentDataHash = `${date}|${exam}|${homework}|${note}|${speakerNotes}|${activeScores}`;
+    const currentDataHash = `${date}|${exam}|${homework}|${note}|${speakerNotes}|${activeScores.join(',')}`;
     if (currentDataHash === lastSyncedDataHash && isAuto) return;
+
+    const payload = {
+      date: date,
+      exam: exam,
+      homework: homework,
+      note: note,
+      speakerNotes: speakerNotes,
+      scoreSubjects: activeScores
+    };
+
+    // 1. 優先寫入本地 PPTX 檔案
+    let localOk = await writeToLocalPptxFile(payload);
+
+    // 2. 斷網狀態防護
+    if (!navigator.onLine) {
+      lastSyncedDataHash = currentDataHash;
+      const statusText = localOk 
+        ? `⚡ [離線模式] 內容已即刻覆寫本機 PPT 檔案！大螢幕可立即開啟投影。`
+        : `⚡ [離線模式] 內容已保存於草稿區 (尚未連結本機檔案)。`;
+      showStatus(statusText, false);
+      updateInlineMsg(`⚠️ 離線狀態：本機 PPT 已就緒，復網後將自動同步雲端。`, "offline");
+      return;
+    }
+
+    // 3. 連線狀態寫入雲端
+    if (!rawPwd) {
+      if (!isAuto) showStatus("本機已更新，但請輸入密碼以同步至雲端簡報！", true);
+      return;
+    }
 
     try {
       const hashedPwd = await hashPassword(rawPwd);
@@ -692,16 +852,17 @@
         homework: homework,
         note: note,
         speakerNotes: speakerNotes,
-        scoreSubjects: activeScores
+        scoreSubjects: activeScores.join(',')
       });
 
       lastSyncedDataHash = currentDataHash;
       const nowStr = new Date().toLocaleTimeString();
-      showStatus(`[同步完成] 內容已上傳雲端 (含演講者備忘錄) (${nowStr})！`, false);
-      updateInlineMsg(`✅ 已於 ${nowStr} 成功自動同步簡報！`, "active");
+      const localMsg = localOk ? "本機 PPT 覆寫成功 ＆ " : "";
+      showStatus(`[雙軌同步完成] ${localMsg}雲端 Slides 已上傳 (${nowStr})！`, false);
+      updateInlineMsg(`✅ 已於 ${nowStr} 成功同步本地與雲端簡報！`, "active");
     } catch (err) {
       console.warn("同步失敗或處於斷網區間：", err.message);
-      updateInlineMsg(`⚠️ 同步暫緩 (${err.message})`, "offline");
+      updateInlineMsg(`⚠️ 本地已更新，雲端同步暫緩 (${err.message})`, "offline");
     }
   }
 
@@ -721,7 +882,6 @@
   function onDateChange() {
     loadDraftForCurrentDate();
     hasReadCurrentDate = false;
-    setWriteButtonState(false);
 
     document.getElementById("formalExam").value = "";
     document.getElementById("formalHomework").value = "";
@@ -740,14 +900,8 @@
     }, 350);
   }
 
-  function toggleChip(el) {
-    el.classList.toggle("active");
-  }
-
-  function toggleDraftChip(el) {
-    el.classList.toggle("active");
-    autoSaveDraft();
-  }
+  function toggleChip(el) { el.classList.toggle("active"); }
+  function toggleDraftChip(el) { el.classList.toggle("active"); autoSaveDraft(); }
 
   function getActiveChips(containerId) {
     const container = document.getElementById(containerId);
@@ -902,7 +1056,7 @@
     updateCountdownUI();
     const now = Date.now();
     if (now >= nextTargetSyncTimestamp) {
-      await performUpload(true);
+      await performUnifiedUpload(true);
       calculateNextTargetTime();
     }
   }
@@ -939,6 +1093,10 @@
       setInterval(checkAndTriggerSync, 1000);
     }
 
+    // 啟動時自動檢查 IndexedDB 還原檔案
+    autoRestoreLocalFile();
+
+    // 啟動連線檢驗
     checkNetworkProbe();
 
     document.addEventListener('visibilitychange', () => {
@@ -948,8 +1106,8 @@
     });
 
     window.addEventListener('online', () => {
-      showStatus("網路連線恢復，執行連線探針...", false);
-      checkNetworkProbe();
+      showStatus("🌐 網路恢復連線！自動補傳寫入雲端 Slides...", false);
+      performUnifiedUpload(true);
     });
   });
 </script>
