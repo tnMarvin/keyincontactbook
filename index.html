@@ -1,6 +1,6 @@
 <!--
-  功能說明：電子聯絡簿系統 - 完整旗艦版 (指定字級規範：標題26pt、欄位與科目20pt、內容正文24pt + 全米黃樣式 + 本地雙向讀寫 + 雙軌同步)
-  代碼產生日期與時間：2026-10-23 17:45
+  功能說明：電子聯絡簿系統 - 雙軌寫入後自動呼叫本地 PPT 開啟 + 嚴格字級排版 (標題26pt、欄位20pt、內容24pt) + 全米黃樣式
+  代碼產生日期與時間：2026-10-23 20:15
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -429,7 +429,7 @@
   </div>
   
   <button id="btnWrite" class="btn btn-submit" onclick="handleWrite()">
-    💾 修改並寫入 (本機 PPT 覆寫 + 雲端同步)
+    💾 修改並寫入 (覆寫本機 PPT ＆ 自動開啟)
   </button>
 
   <div id="statusBox" class="status-box">初始化中...</div>
@@ -680,7 +680,7 @@
     }
   }
 
-  /* 寫入本地端 PPT 檔案 (標題26pt、欄位與科目20pt、內容24pt) */
+  /* 寫入本地端 PPT 檔案 (嚴格字級標準 + 方案 1 自動開啟 PPT) */
   async function writeToLocalPptxFile(data) {
     if (!localFileHandle) return false;
     try {
@@ -693,14 +693,12 @@
       pptx.layout = 'LAYOUT_16x9'; // 寬 10.0 英吋 x 高 5.625 英吋
       const slide = pptx.addSlide();
 
-      // 計算日期星期格式
       const dateParts = data.date.split("-");
       const dObj = new Date(data.date);
       const days = ["日", "一", "二", "三", "四", "五", "六"];
       const dayStr = days[dObj.getDay()];
       const headerTitle = `聯絡簿  ${parseInt(dateParts[1], 10)}/${parseInt(dateParts[2], 10)}（ ${dayStr} ）`;
 
-      // 樣式常數設定
       const FONT_FAMILY = "Microsoft JhengHei";
       const C_YELLOW = "FEF2CB";
       const BORDER_SPEC = { pt: 1.5, color: '7F7F7F' };
@@ -710,7 +708,7 @@
 
       let tableRows = [];
 
-      // 列 0：最頂部標題列 (標題 26pt)
+      // 列 0：標題 26pt
       tableRows.push([
         { 
           text: headerTitle, 
@@ -726,7 +724,7 @@
         }
       ]);
 
-      // 列 1：欄位表頭 (考試、作業、成績 20pt)
+      // 列 1：表頭 20pt
       tableRows.push([
         { text: "", options: { fill: C_YELLOW } },
         { text: "考 試", options: { fill: C_YELLOW, align: 'center', valign: 'middle', bold: true, fontSize: 20, fontFace: FONT_FAMILY } },
@@ -734,7 +732,7 @@
         { text: "成 績", options: { fill: C_YELLOW, align: 'center', valign: 'middle', bold: true, fontSize: 20, fontFace: FONT_FAMILY } }
       ]);
 
-      // 列 2：國文列 (科目 20pt；考試與作業內容 24pt，跨 7 列)
+      // 列 2：國文 20pt；考試與作業 24pt
       tableRows.push([
         { text: "國文", options: { fill: C_YELLOW, align: 'center', valign: 'middle', bold: true, fontSize: 20, fontFace: FONT_FAMILY } },
         { text: data.exam || "", options: { rowspan: 7, fill: C_YELLOW, valign: 'top', fontSize: 24, fontFace: FONT_FAMILY, margin: [6, 8, 6, 8] } },
@@ -742,7 +740,7 @@
         { text: scoreSet.has("國文") ? "有" : "", options: { fill: C_YELLOW, align: 'center', valign: 'middle', fontSize: 20, bold: true, fontFace: FONT_FAMILY } }
       ]);
 
-      // 列 3~8：英語至公民列 (科目 20pt)
+      // 列 3~8：其餘科目 20pt
       for (let i = 1; i < allSubjects.length; i++) {
         const subName = allSubjects[i];
         const hasScore = scoreSet.has(subName);
@@ -753,13 +751,12 @@
         ]);
       }
 
-      // 列 9：最底端「備／嘉」列 (科目標籤 20pt；內容 24pt)
+      // 列 9：備／嘉 20pt；內容 24pt
       tableRows.push([
         { text: "備／嘉", options: { fill: C_YELLOW, align: 'center', valign: 'middle', bold: true, fontSize: 20, fontFace: FONT_FAMILY } },
         { text: data.note || "", options: { colspan: 3, fill: C_YELLOW, valign: 'middle', fontSize: 24, fontFace: FONT_FAMILY, margin: [4, 8, 4, 8] } }
       ]);
 
-      // 列高配置矩陣 (總高 = 0.58 + 0.44 + (0.48 * 7) + 0.65 = 5.03 英吋，安全小於畫布 5.625 英吋)
       const explicitRowHeights = [0.58, 0.44, 0.48, 0.48, 0.48, 0.48, 0.48, 0.48, 0.48, 0.65];
 
       slide.addTable(tableRows, {
@@ -772,13 +769,13 @@
         autoPage: false
       });
 
-      // 寫入演講者備忘錄
       if (data.speakerNotes) {
         slide.addNotes(data.speakerNotes);
       }
 
       const blob = await pptx.write("blob");
 
+      // 1. 寫入本地實體檔案
       let writable;
       try {
         writable = await localFileHandle.createWritable({ keepExistingData: false });
@@ -789,6 +786,21 @@
 
       await writable.write(blob);
       await writable.close();
+
+      // 2. 方案 1 核心：觸發瀏覽器下載並自動啟動 PowerPoint 開啟
+      try {
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = localFileHandle.name || "聯絡簿投影.pptx";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(downloadUrl), 4000);
+      } catch (dlErr) {
+        console.warn("自動開啟觸發略過：", dlErr);
+      }
+
       return true;
 
     } catch (err) {
@@ -915,7 +927,6 @@
     executeRead(false);
   }
 
-  /* 讀取雲端整日內容 */
   async function executeRead(isSilent = false) {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
@@ -995,7 +1006,7 @@
     if (!navigator.onLine) {
       lastSyncedDataHash = currentDataHash;
       const statusText = localOk 
-        ? `⚡ [離線模式] 內容已即刻覆寫本機 PPT 檔案！大螢幕可立即開啟投影。`
+        ? `⚡ [離線模式] 內容已覆寫本機 PPT 檔案並自動叫起播放！`
         : `⚡ [離線模式] 內容已保存於草稿區 (尚未連結本機檔案)。`;
       showStatus(statusText, false);
       updateInlineMsg(`⚠️ 離線狀態：本機 PPT 已就緒，復網後將自動同步雲端。`, "offline");
