@@ -1,6 +1,6 @@
 <!--
-  功能說明：電子聯絡簿系統 - 雙軌完整旗艦版 (支援 IndexedDB 記憶檔案 + 斷網覆寫本地 PPT 投影 + 演講者備忘錄安全讀寫 + PWA)
-  代碼產生日期與時間：2026-10-23 14:35
+  功能說明：電子聯絡簿系統 - 全米黃樣式 + 本地 PPT 雙向讀寫 (JSZip 解構) + PWA 離線旗艦
+  代碼產生日期與時間：2026-10-23 17:10
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -12,8 +12,9 @@
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#198754">
 
-  <!-- 本機離線 PPTX 生成引擎 -->
+  <!-- 本機 PPTX 生成庫與解壓縮庫 -->
   <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
   <script>
     if (window.top !== window.self) {
@@ -36,6 +37,8 @@
       --btn-green-hover: #146c43;
       --btn-dark: #212529;
       --btn-dark-hover: #1c1f23;
+      --btn-blue: #0d6efd;
+      --btn-blue-hover: #0b5ed7;
       --btn-warning: #ffc107;
       --btn-danger: #dc3545;
       --btn-secondary: #6c757d;
@@ -116,7 +119,6 @@
       cursor: pointer;
     }
 
-    /* 本機 PPT 檔案記憶列 */
     .local-file-bar {
       display: flex;
       align-items: center;
@@ -222,6 +224,13 @@
       color: #3730a3;
     }
 
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
     .btn {
       width: 100%;
       padding: 14px;
@@ -247,8 +256,10 @@
 
     .btn-submit { background-color: var(--btn-green); }
     .btn-submit:hover { background-color: var(--btn-green-hover); }
-    .btn-preview { background-color: var(--btn-dark); }
+    .btn-preview { background-color: var(--btn-dark); margin-bottom: 0; }
     .btn-preview:hover { background-color: var(--btn-dark-hover); }
+    .btn-local-read { background-color: var(--btn-blue); margin-bottom: 0; }
+    .btn-local-read:hover { background-color: var(--btn-blue-hover); }
 
     .btn-sm {
       width: auto;
@@ -330,7 +341,7 @@
     }
 
     @media (max-width: 520px) {
-      .grid-2col { grid-template-columns: 1fr; }
+      .grid-2col, .btn-row { grid-template-columns: 1fr; }
       .schedule-bar, .local-file-bar { flex-direction: column; align-items: flex-start; }
       .action-row { flex-direction: column; }
       .action-row .btn-sm { width: 100%; }
@@ -391,27 +402,31 @@
   <div class="grid-2col form-group">
     <div>
       <label for="formalExam">📌 正式考試內容：</label>
-      <textarea id="formalExam" rows="7" placeholder="連線驗證後自動帶入..."></textarea>
+      <textarea id="formalExam" rows="7" placeholder="連線驗證或讀取本地後帶入..."></textarea>
     </div>
     <div>
       <label for="formalHomework">✍️ 正式作業內容：</label>
-      <textarea id="formalHomework" rows="7" placeholder="連線驗證後自動帶入..."></textarea>
+      <textarea id="formalHomework" rows="7" placeholder="連線驗證或讀取本地後帶入..."></textarea>
     </div>
   </div>
 
   <!-- 3. 公開備註 / 嘉言錄 -->
   <div class="form-group">
     <label for="formalNote">📢 公開備註 / 嘉言錄（投影片底端整欄）：</label>
-    <textarea id="formalNote" rows="2" placeholder="連線驗證後自動帶入..."></textarea>
+    <textarea id="formalNote" rows="2" placeholder="連線驗證或讀取本地後帶入..."></textarea>
   </div>
 
   <!-- 4. 投影片演講者備忘錄 -->
   <div class="speaker-card">
     <label for="formalSpeakerNotes">🎙️ 投影片演講者備忘錄（Speaker Notes，放投影講稿與私人提醒）：</label>
-    <textarea id="formalSpeakerNotes" rows="3" placeholder="例如：課堂重點講稿、待收回條、家長聯絡記錄... (系統已自動保護日期標記)"></textarea>
+    <textarea id="formalSpeakerNotes" rows="3" placeholder="例如：課堂重點講稿、待收回條、家長聯絡記錄..."></textarea>
   </div>
 
-  <button class="btn btn-preview" onclick="manualTriggerRead()">☁️ 讀取雲端投影片內容</button> 
+  <!-- 讀取雙按鈕：雲端與本地端 -->
+  <div class="btn-row">
+    <button class="btn btn-preview" onclick="manualTriggerRead()">☁️ 讀取雲端投影片</button>
+    <button class="btn btn-local-read" onclick="readFromLocalPptxFile()">💻 讀取本地 PPT 檔</button>
+  </div>
   
   <button id="btnWrite" class="btn btn-submit" onclick="handleWrite()">
     💾 修改並寫入 (本機 PPT 覆寫 + 雲端同步)
@@ -522,7 +537,6 @@
     });
   }
 
-  /* 啟動時自動還原檔案設定 */
   async function autoRestoreLocalFile() {
     try {
       const handle = await getHandleFromDB();
@@ -558,7 +572,7 @@
         const perm = await localFileHandle.requestPermission({ mode: 'readwrite' });
         if (perm === 'granted') {
           setFileUIReady(localFileHandle.name);
-          showStatus(`已恢復對 [${localFileHandle.name}] 的寫入授權！`, false);
+          showStatus(`已恢復對 [${localFileHandle.name}] 的存取授權！`, false);
           return;
         }
       }
@@ -580,7 +594,93 @@
     }
   }
 
-  /* 使用 PptxGenJS 生成投影片並直接覆寫本地檔案 */
+  /* 讀取本地 PPT 檔 (JSZip 解構投影片與演講者備忘稿) */
+  async function readFromLocalPptxFile() {
+    if (!localFileHandle) {
+      showStatus("尚未指定本機 PPT 檔案，請先點擊上方按鈕選取！", true);
+      return;
+    }
+
+    try {
+      if ((await localFileHandle.queryPermission({ mode: 'read' })) !== 'granted') {
+        const perm = await localFileHandle.requestPermission({ mode: 'read' });
+        if (perm !== 'granted') return;
+      }
+
+      showStatus("正在讀取並解析本機 PPT 檔案...", false);
+      const file = await localFileHandle.getFile();
+      const arrayBuffer = await file.arrayBuffer();
+      
+      const zip = await JSZip.loadAsync(arrayBuffer);
+
+      // 1. 讀取演講者備忘錄 (notesSlide1.xml)
+      let speakerNotesText = "";
+      const notesFile = zip.file("ppt/notesSlides/notesSlide1.xml");
+      if (notesFile) {
+        const notesXmlStr = await notesFile.async("string");
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(notesXmlStr, "application/xml");
+        const textNodes = xmlDoc.getElementsByTagName("a:t");
+        let allNotes = [];
+        for (let i = 0; i < textNodes.length; i++) {
+          allNotes.push(textNodes[i].textContent);
+        }
+        speakerNotesText = allNotes.join("").trim();
+      }
+
+      // 2. 讀取表格文字 (slide1.xml)
+      const slideFile = zip.file("ppt/slides/slide1.xml");
+      if (!slideFile) throw new Error("在 PPTX 中找不到投影片 XML 結構！");
+
+      const slideXmlStr = await slideFile.async("string");
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(slideXmlStr, "application/xml");
+
+      const rows = xmlDoc.getElementsByTagName("a:tr");
+      if (rows.length < 9) {
+        throw new Error("本機 PPT 表格結構不符或非標準版型！");
+      }
+
+      function getCellText(rowNode, colIdx) {
+        const cells = rowNode.getElementsByTagName("a:tc");
+        if (colIdx >= cells.length) return "";
+        const tNodes = cells[colIdx].getElementsByTagName("a:t");
+        let txt = [];
+        for (let i = 0; i < tNodes.length; i++) txt.push(tNodes[i].textContent);
+        return txt.join("\n").trim();
+      }
+
+      const examText = getCellText(rows[2], 1);
+      const homeworkText = getCellText(rows[2], 2);
+
+      const subjects = ["國文", "英語", "數學", "自然", "歷史", "地理", "公民"];
+      let activeScoreSubs = [];
+      for (let r = 2; r <= 8; r++) {
+        const scoreVal = getCellText(rows[r], 3);
+        if (scoreVal.includes("有")) {
+          activeScoreSubs.push(subjects[r - 2]);
+        }
+      }
+
+      const noteText = getCellText(rows[9], 1);
+
+      document.getElementById("formalExam").value = examText;
+      document.getElementById("formalHomework").value = homeworkText;
+      document.getElementById("formalNote").value = noteText;
+      document.getElementById("formalSpeakerNotes").value = speakerNotesText;
+      setActiveChips("formalScoreChips", activeScoreSubs);
+
+      hasReadCurrentDate = true;
+      showStatus(`已成功從本機 PPT 載入最新離線內容！`, false);
+      updateInlineMsg(`💻 已讀取本地最新 PPT 內容`, "active");
+
+    } catch (err) {
+      console.error("讀取本地 PPT 失敗：", err);
+      showStatus(`讀取本地 PPT 失敗: ${err.message}`, true);
+    }
+  }
+
+  /* 寫入本地端 PPT 檔案 (全表格純米黃底色樣式 FEF2CB) */
   async function writeToLocalPptxFile(data) {
     if (!localFileHandle) return false;
     try {
@@ -592,37 +692,92 @@
       const pptx = new PptxGenJS();
       pptx.layout = 'LAYOUT_16x9';
       const slide = pptx.addSlide();
-      
-      slide.addText(`📅 聯絡簿 - ${data.date}`, { x: 0.5, y: 0.4, w: 9.0, h: 0.5, fontSize: 20, bold: true, color: '198754' });
 
-      const scoreText = data.scoreSubjects.length > 0 ? data.scoreSubjects.join('、') : "無";
-      slide.addText(`📊 今日有成績科目：${scoreText}`, { x: 0.5, y: 1.0, w: 9.0, h: 0.4, fontSize: 14, bold: true, color: '0f5132' });
+      const dateParts = data.date.split("-");
+      const dObj = new Date(data.date);
+      const days = ["日", "一", "二", "三", "四", "五", "六"];
+      const dayStr = days[dObj.getDay()];
+      const headerTitle = `聯絡簿  ${parseInt(dateParts[1], 10)}/${parseInt(dateParts[2], 10)}（${dayStr}）`;
 
-      const tableData = [
-        [
-          { text: "📌 考試內容", options: { bold: true, fill: 'e9ecef', align: 'center' } },
-          { text: "✍️ 作業內容", options: { bold: true, fill: 'e9ecef', align: 'center' } }
-        ],
-        [
-          { text: data.exam || "(本日無排定考試)", options: { valign: 'top' } },
-          { text: data.homework || "(本日無作業)", options: { valign: 'top' } }
-        ]
-      ];
-      slide.addTable(tableData, { x: 0.5, y: 1.5, w: 9.0, h: 3.5, colW: [4.5, 4.5], border: { pt: 1, color: 'ced4da' } });
-      slide.addText(`📢 備註：${data.note || "無"}`, { x: 0.5, y: 5.2, w: 9.0, h: 0.8, fontSize: 13, color: '495057', fill: 'f8f9fa' });
+      // 全表格統一米黃底色
+      const C_YELLOW = "FEF2CB";
+      const BORDER_SPEC = { pt: 1, color: '7F7F7F' };
+
+      const allSubjects = ["國文", "英語", "數學", "自然", "歷史", "地理", "公民"];
+      const scoreSet = new Set(data.scoreSubjects || []);
+
+      let tableRows = [];
+
+      // 列 0：最頂部標題列 (全寬 4 欄合併)
+      tableRows.push([
+        { text: headerTitle, options: { colspan: 4, fill: C_YELLOW, align: 'center', bold: true, fontSize: 16 } },
+        null, null, null
+      ]);
+
+      // 列 1：欄位表頭
+      tableRows.push([
+        { text: "", options: { fill: C_YELLOW } },
+        { text: "考 試", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 14 } },
+        { text: "作 業", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 14 } },
+        { text: "成 績", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 14 } }
+      ]);
+
+      // 列 2~8：七科目內容
+      for (let i = 0; i < allSubjects.length; i++) {
+        const subName = allSubjects[i];
+        const isFirst = (i === 0);
+        const hasScore = scoreSet.has(subName);
+
+        tableRows.push([
+          { text: subName, options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 13, valign: 'middle' } },
+          isFirst 
+            ? { text: data.exam || "", options: { rowspan: 7, fill: C_YELLOW, valign: 'top', fontSize: 12 } } 
+            : null,
+          isFirst 
+            ? { text: data.homework || "", options: { rowspan: 7, fill: C_YELLOW, valign: 'top', fontSize: 12 } } 
+            : null,
+          { text: hasScore ? "有" : "", options: { fill: C_YELLOW, align: 'center', valign: 'middle', fontSize: 12, bold: true } }
+        ]);
+      }
+
+      // 列 9：最底端「備／嘉」列 (右側 3 欄合併)
+      tableRows.push([
+        { text: "備／嘉", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 13, valign: 'middle' } },
+        { text: data.note || "", options: { colspan: 3, fill: C_YELLOW, valign: 'middle', fontSize: 12 } },
+        null, null
+      ]);
+
+      slide.addTable(tableRows, {
+        x: 0.5,
+        y: 0.4,
+        w: 9.0,
+        h: 6.4,
+        colW: [1.2, 3.4, 3.4, 1.0],
+        border: BORDER_SPEC,
+        autoPage: false
+      });
 
       if (data.speakerNotes) {
         slide.addNotes(data.speakerNotes);
       }
 
       const blob = await pptx.write("blob");
-      const writable = await localFileHandle.createWritable();
+
+      let writable;
+      try {
+        writable = await localFileHandle.createWritable({ keepExistingData: false });
+      } catch (createErr) {
+        await localFileHandle.getFile();
+        writable = await localFileHandle.createWritable({ keepExistingData: false });
+      }
+
       await writable.write(blob);
       await writable.close();
       return true;
+
     } catch (err) {
       console.error("本機寫入失敗：", err);
-      showStatus(`本機 PPT 寫入失敗 (請確認檔案未在 PowerPoint 中被鎖定): ${err.message}`, true);
+      showStatus(`本機 PPT 寫入失敗: ${err.message} (若開啟了 PowerPoint，請先關閉簡報檔再點擊寫入)`, true);
       return false;
     }
   }
@@ -719,7 +874,7 @@
     try {
       await sendJsonpRequest("ping");
       isOnlineState = true;
-      updateInlineMsg(`🌐 連線正常！請驗證身分載入簡報。`, "normal");
+      updateInlineMsg(`🌐 連線正常！可自雲端或本地讀取內容。`, "normal");
       
       const pwd = document.getElementById("pwd").value.trim();
       if (!pwd) {
@@ -730,7 +885,7 @@
       }
     } catch (e) {
       isOnlineState = false;
-      updateInlineMsg("⚠️ 目前為離線狀態！點擊寫入可直接覆寫本機 PPT 檔案以供大螢幕投影。", "offline");
+      updateInlineMsg("⚠️ 目前為離線狀態！請點擊【讀取本地 PPT 檔】載入或直接編輯寫入。", "offline");
       showStatus("網路離線中：點擊修改並寫入將直接覆寫本機 PPT 檔案！", false);
     }
   }
@@ -744,7 +899,7 @@
     executeRead(false);
   }
 
-  /* 讀取演講者備忘錄與簡報表格 */
+  /* 讀取雲端整日內容 */
   async function executeRead(isSilent = false) {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
@@ -772,24 +927,21 @@
         setActiveChips("formalScoreChips", res.data.scoreSubjects || []);
 
         hasReadCurrentDate = true;
-        showStatus(`已精準載入 [${date}] 雲端簡報內容 (含演講者備忘錄)！`, false);
+        showStatus(`已精準載入 [${date}] 雲端簡報內容！`, false);
         updateInlineMsg(`✅ 已同步最新雲端內容`, "active");
       }
     } catch (err) {
       hasReadCurrentDate = false;
-      showStatus(`讀取失敗: ${err.message}`, true);
+      showStatus(`雲端讀取失敗: ${err.message}`, true);
     }
   }
 
-  function manualTriggerRead() {
-    executeRead(false);
-  }
+  function manualTriggerRead() { executeRead(false); }
 
   async function handleWrite() {
     await performUnifiedUpload(false);
   }
 
-  /* 雙軌同步核心流程 */
   async function performUnifiedUpload(isAuto = false) {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
@@ -822,10 +974,8 @@
       scoreSubjects: activeScores
     };
 
-    // 1. 優先寫入本地 PPTX 檔案
     let localOk = await writeToLocalPptxFile(payload);
 
-    // 2. 斷網狀態防護
     if (!navigator.onLine) {
       lastSyncedDataHash = currentDataHash;
       const statusText = localOk 
@@ -836,7 +986,6 @@
       return;
     }
 
-    // 3. 連線狀態寫入雲端
     if (!rawPwd) {
       if (!isAuto) showStatus("本機已更新，但請輸入密碼以同步至雲端簡報！", true);
       return;
@@ -1093,16 +1242,11 @@
       setInterval(checkAndTriggerSync, 1000);
     }
 
-    // 啟動時自動檢查 IndexedDB 還原檔案
     autoRestoreLocalFile();
-
-    // 啟動連線檢驗
     checkNetworkProbe();
 
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        checkAndTriggerSync();
-      }
+      if (!document.hidden) checkAndTriggerSync();
     });
 
     window.addEventListener('online', () => {
