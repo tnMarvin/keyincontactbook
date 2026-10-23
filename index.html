@@ -1,6 +1,6 @@
 <!--
-  功能說明：電子聯絡簿系統 - 全米黃樣式 + 本地 PPT 雙向讀寫 (JSZip 解構) + PWA 離線旗艦
-  代碼產生日期與時間：2026-10-23 17:15
+  功能說明：電子聯絡簿系統 - 完整旗艦版 (修復 PptxGenJS 合併語法 + 全米黃樣式 + 本地雙向讀寫 + 雙軌同步)
+  代碼產生日期與時間：2026-10-23 17:30
 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -680,7 +680,7 @@
     }
   }
 
-  /* 寫入本地端 PPT 檔案 (全表格純米黃底色樣式 FEF2CB) */
+  /* 寫入本地端 PPT 檔案 (嚴格遵循 PptxGenJS 合併語法規範，全表格純米黃樣式) */
   async function writeToLocalPptxFile(data) {
     if (!localFileHandle) return false;
     try {
@@ -699,7 +699,6 @@
       const dayStr = days[dObj.getDay()];
       const headerTitle = `聯絡簿  ${parseInt(dateParts[1], 10)}/${parseInt(dateParts[2], 10)}（${dayStr}）`;
 
-      // 全表格統一米黃底色
       const C_YELLOW = "FEF2CB";
       const BORDER_SPEC = { pt: 1, color: '7F7F7F' };
 
@@ -708,13 +707,12 @@
 
       let tableRows = [];
 
-      // 列 0：最頂部標題列 (全寬 4 欄合併)
+      // 列 0：最頂部標題列 (全寬 4 欄合併，後面不放 null 佔位)
       tableRows.push([
-        { text: headerTitle, options: { colspan: 4, fill: C_YELLOW, align: 'center', bold: true, fontSize: 16 } },
-        null, null, null
+        { text: headerTitle, options: { colspan: 4, fill: C_YELLOW, align: 'center', bold: true, fontSize: 16 } }
       ]);
 
-      // 列 1：欄位表頭
+      // 列 1：欄位表頭 (4 個儲存格)
       tableRows.push([
         { text: "", options: { fill: C_YELLOW } },
         { text: "考 試", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 14 } },
@@ -722,29 +720,29 @@
         { text: "成 績", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 14 } }
       ]);
 
-      // 列 2~8：七科目內容
-      for (let i = 0; i < allSubjects.length; i++) {
+      // 列 2：國文列 (包含跨 7 列的考試與作業大合併)
+      tableRows.push([
+        { text: "國文", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 13, valign: 'middle' } },
+        { text: data.exam || "", options: { rowspan: 7, fill: C_YELLOW, valign: 'top', fontSize: 12 } },
+        { text: data.homework || "", options: { rowspan: 7, fill: C_YELLOW, valign: 'top', fontSize: 12 } },
+        { text: scoreSet.has("國文") ? "有" : "", options: { fill: C_YELLOW, align: 'center', valign: 'middle', fontSize: 12, bold: true } }
+      ]);
+
+      // 列 3~8：英語至公民列 (中央兩欄已由列 2 rowspan 覆蓋，每列只定義「科目」與「成績」兩格，不可放 null)
+      for (let i = 1; i < allSubjects.length; i++) {
         const subName = allSubjects[i];
-        const isFirst = (i === 0);
         const hasScore = scoreSet.has(subName);
 
         tableRows.push([
           { text: subName, options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 13, valign: 'middle' } },
-          isFirst 
-            ? { text: data.exam || "", options: { rowspan: 7, fill: C_YELLOW, valign: 'top', fontSize: 12 } } 
-            : null,
-          isFirst 
-            ? { text: data.homework || "", options: { rowspan: 7, fill: C_YELLOW, valign: 'top', fontSize: 12 } } 
-            : null,
           { text: hasScore ? "有" : "", options: { fill: C_YELLOW, align: 'center', valign: 'middle', fontSize: 12, bold: true } }
         ]);
       }
 
-      // 列 9：最底端「備／嘉」列 (右側 3 欄合併)
+      // 列 9：最底端「備／嘉」列 (左邊科目 1 格，右邊跨 3 欄合併 1 格，後面不放 null)
       tableRows.push([
         { text: "備／嘉", options: { fill: C_YELLOW, align: 'center', bold: true, fontSize: 13, valign: 'middle' } },
-        { text: data.note || "", options: { colspan: 3, fill: C_YELLOW, valign: 'middle', fontSize: 12 } },
-        null, null
+        { text: data.note || "", options: { colspan: 3, fill: C_YELLOW, valign: 'middle', fontSize: 12 } }
       ]);
 
       slide.addTable(tableRows, {
@@ -899,7 +897,6 @@
     executeRead(false);
   }
 
-  /* 讀取雲端整日內容 */
   async function executeRead(isSilent = false) {
     const rawPwd = document.getElementById("pwd").value.trim();
     const date = document.getElementById("targetDate").value;
